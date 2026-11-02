@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Mounted } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { argvFor, checkerArgv, onHost, parseResult, report, SKILLS_CLI, sortItems } from './logic.ts'
+import { argvFor, checkerArgv, onHost, parseKinds, parseResult, report, SKILLS_CLI, sortItems } from './logic.ts'
 
 const PLUGIN = 'uptick'
 const HOME = '/home/test'
@@ -422,7 +422,12 @@ test('the Brewfile option reaches the checker as one argument; unset, none', asy
     '--brewfile=~/dotfiles/Brewfile',
     '--extra=extra --json',
   ])
-  expect(checkerArgv('/mod', undefined, false, { kinds: 'skill, brew' }).at(-1)).toBe('--kinds=skill,brew')
+  expect(checkerArgv('/mod', undefined, false, { kinds: 'skill, brew' }).at(-1)).toBe('--kinds=skill, brew')
+})
+
+test('checkerArgv passes an unknown kinds entry on, so the checker can report it', () => {
+  expect(checkerArgv('/mod', undefined, false, { kinds: 'plugin,skill;' }).at(-1)).toBe('--kinds=plugin,skill;')
+  expect(parseKinds('plugin,skill;')).toEqual(['plugin'])
 })
 
 test('XDG_CACHE_HOME moves the cache to $XDG_CACHE_HOME/uptick/last.json', async ($, on) => {

@@ -358,6 +358,24 @@ class Kinds(unittest.TestCase):
             cu.main([])
         self.assertEqual(seen, [{'plugin', 'brew'}, set(), None])
 
+    def test_unknown_kind_is_reported(self):
+        seen = []
+
+        def fake(*args):
+            seen.append(args[4])
+            return {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [], 'items': []}
+
+        out = io.StringIO()
+        with mock.patch.object(cu, 'check', fake), mock.patch('sys.stdout', out):
+            code = cu.main(['--json', '--kinds=plugin, skill;,,x'])
+        self.assertEqual(seen, [{'plugin'}])
+        problems = json.loads(out.getvalue())['problems']
+        self.assertEqual(len(problems), 1)
+        # The exact text also proves the empty entry between the two commas is not reported.
+        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew)')
+        self.assertEqual(problems[0]['hint'], 'fix kinds in /config, UPTICK_KINDS or --kinds')
+        self.assertEqual(code, 2)
+
 
 class TimeBudget(unittest.TestCase):
     def tearDown(self):

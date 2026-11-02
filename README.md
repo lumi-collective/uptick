@@ -290,8 +290,8 @@ shows what is new around Claude Code and updates one item at a time, after you c
 - Package managers other than Homebrew: winget, scoop, choco, apt, pacman, nix, pip and uv. Add them with
   `checkCommand`.
 - Pinned Homebrew packages are left out.
-- An entry in `kinds` that is not `plugin`, `skill` or `brew` (a typo such as `skill;`) is dropped without a warning,
-  so that group is not checked.
+- An entry in `kinds` that is not `plugin`, `skill` or `brew` (a typo such as `skill;`) is ignored, so the group you
+  meant is not checked. The result shows a problem row that names the entry.
 - `claude plugin update` runs from your home folder, so a plugin installed at project or local scope may
   not update from the pane; run it in that project.
 - A skill at the root of its repository is not compared; it shows under Info with the reason. A skill installed at a

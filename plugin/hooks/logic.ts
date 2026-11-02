@@ -143,7 +143,7 @@ export function checkerArgv(root: string, cachePath: string | undefined, isFetch
     ...(opt('brewfile') ? [`--brewfile=${opt('brewfile')}`] : []),
     ...(opt('knownBroken') ? [`--known-broken=${opt('knownBroken')}`] : []),
     ...(opt('checkCommand') ? [`--extra=${opt('checkCommand')}`] : []),
-    ...(typeof options.kinds === 'string' ? [`--kinds=${parseKinds(options.kinds).join(',')}`] : []),
+    ...(typeof options.kinds === 'string' ? [`--kinds=${opt('kinds')}`] : []),
   ]
 }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- An unknown entry in `kinds` (such as `skill;`) now shows a problem row instead of being dropped silently.
+
 ## 0.1.0
 
 First release.

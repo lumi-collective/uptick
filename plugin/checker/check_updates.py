@@ -477,8 +477,15 @@ def main(argv=None):
     ap.add_argument('--extra')
     ap.add_argument('--kinds')
     args = ap.parse_args(argv)
-    kinds = None if args.kinds is None else {k.strip() for k in args.kinds.split(',')} & set(KINDS)
+    listed = None if args.kinds is None else {k.strip() for k in args.kinds.split(',')} - {''}
+    kinds = None if listed is None else listed & set(KINDS)
     result = check(args.fetch, args.brewfile, args.known_broken, args.extra, kinds)
+    unknown = ', '.join(f'"{k}"' for k in sorted(listed - set(KINDS))) if listed else ''
+    if unknown:
+        # A typo must not silently turn a group off.
+        result['problems'].append({
+            'text': f'kinds: ignored unknown {unknown} (valid: {", ".join(KINDS)})',
+            'hint': 'fix kinds in /config, UPTICK_KINDS or --kinds'})
     if args.cache is not None:
         path = os.path.expanduser(args.cache) if args.cache else os.path.join(
             os.environ.get('XDG_CACHE_HOME') or os.path.join(HOME, '.cache'), 'uptick', 'last.json')
