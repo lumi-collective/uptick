@@ -4,10 +4,10 @@
 
 **See what is out of date around Claude Code, and update it after you confirm the exact command.**
 
-[![test](https://github.com/trustmeimlumi/uptick/actions/workflows/test.yml/badge.svg)](https://github.com/trustmeimlumi/uptick/actions/workflows/test.yml)
+[![test](https://github.com/lumi-collective/uptick/actions/workflows/test.yml/badge.svg)](https://github.com/lumi-collective/uptick/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Claude Code 2.1.309](https://img.shields.io/badge/Claude%20Code-2.1.309%20tested-d97757.svg)](#requirements)
-[![Release](https://img.shields.io/github/v/release/trustmeimlumi/uptick)](https://github.com/trustmeimlumi/uptick/releases)
+[![Release](https://img.shields.io/github/v/release/lumi-collective/uptick)](https://github.com/lumi-collective/uptick/releases)
 
 ![Uptick opens with /uptick, lists the updates by group, and updates one after the confirm step](media/demo.gif)
 
@@ -55,23 +55,23 @@ advertised) is listed under Info as `not compared`, never offered.
 | claude.ai (web, mobile) and Cowork | Not supported: the plugin does not install there. |
 | macOS | Tested. |
 | Linux | The checker's tests run in CI; the mod's tests run there too. No casks on Linux. |
-| Windows | The checker's tests and the mod's tests (on the fake engine) run in CI. The mod starts the checker with `py -3` and runs `npx` and `claude` through `cmd.exe /d /c`; this has not run in a real session yet. No Homebrew. |
+| Windows | Tried in a real Claude Code session: the pane opens and the check runs (the mod starts the checker with `py -3` and runs `claude` through `cmd.exe /d /c`). Updating from the pane has not been tried yet. The checker's tests and the mod's tests (on the fake engine) also run in CI. No Homebrew. |
 
 ## Install, update, uninstall
 
 At the prompt of a terminal session:
 
 ```
-/plugin install uptick --marketplace trustmeimlumi/uptick
+/plugin install uptick --marketplace lumi-collective/uptick
 ```
 
 From a shell, with settings if you want them:
 
 ```
-claude plugin install uptick --marketplace trustmeimlumi/uptick --config brewfile=~/Brewfile
+claude plugin install uptick --marketplace lumi-collective/uptick --config brewfile=~/Brewfile
 ```
 
-In the desktop app: + next to the prompt box → Plugins → Add marketplace `trustmeimlumi/uptick` → Add plugin.
+In the desktop app: + next to the prompt box → Plugins → Add marketplace `lumi-collective/uptick` → Add plugin.
 
 Update: `claude plugin update uptick@uptick`, then `/reload-plugins`.
 Uninstall: `claude plugin uninstall uptick@uptick`.
@@ -290,6 +290,8 @@ shows what is new around Claude Code and updates one item at a time, after you c
 - Package managers other than Homebrew: winget, scoop, choco, apt, pacman, nix, pip and uv. Add them with
   `checkCommand`.
 - Pinned Homebrew packages are left out.
+- An entry in `kinds` that is not `plugin`, `skill` or `brew` (a typo such as `skill;`) is dropped without a warning,
+  so that group is not checked.
 - `claude plugin update` runs from your home folder, so a plugin installed at project or local scope may
   not update from the pane; run it in that project.
 - A skill at the root of its repository is not compared; it shows under Info with the reason. A skill installed at a

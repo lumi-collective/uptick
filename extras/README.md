@@ -7,7 +7,7 @@ anything on its own; the menu bar plugin runs an update only when you click it.
 They run the checker in the clone's plugin folder, `plugin/`, from a clone of this repository:
 
 ```
-git clone https://github.com/trustmeimlumi/uptick ~/src/uptick
+git clone https://github.com/lumi-collective/uptick ~/src/uptick
 ```
 
 `git pull` in the clone updates them. The paths below assume `~/src/uptick`.

@@ -62,7 +62,7 @@ line above the prompt, which stays while Claude works.
 At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin install uptick --marketplace trustmeimlumi/uptick
+/plugin install uptick --marketplace lumi-collective/uptick
 ```
 
-Full documentation, settings and source: https://github.com/trustmeimlumi/uptick
+Full documentation, settings and source: https://github.com/lumi-collective/uptick
