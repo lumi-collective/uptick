@@ -37,7 +37,9 @@ PATH.
 Its own cache file (the last result, in your cache folder), the metadata of your installed plugins and
 skills, a Brewfile if you set one, and a known-broken list if you set one or the default file exists in
 your config folder. It reads the environment variables HOME, USERPROFILE, OS, XDG_CACHE_HOME and
-XDG_CONFIG_HOME to find those files.
+XDG_CONFIG_HOME to find those files. To tell whether Claude Code updates itself, it reads DISABLE_UPDATES,
+DISABLE_AUTOUPDATER and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC from the environment and from the env
+block of your Claude Code settings.json; nothing else in that file.
 
 What it passes on: the item names to the update commands; your marketplace names to claude plugin
 marketplace update; the GitHub repositories, folders and refs named in your plugin and skill metadata to gh

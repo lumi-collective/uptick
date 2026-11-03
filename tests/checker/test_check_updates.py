@@ -426,6 +426,68 @@ class SelfItems(unittest.TestCase):
             self.assertEqual(cu.main([]), 0)
         self.assertIn('  · Claude Code: 2.1.0 → 2.2.0 (updates itself; new sessions get it)', out.getvalue())
 
+    def test_a_note_replaces_the_default_text(self):
+        result = {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [],
+                  'items': [{'id': 'claude-code', 'kind': 'self', 'name': 'Claude Code', 'have': '2.1.0', 'latest': '2.2.0',
+                             'note': 'auto-update is off: run claude update'}]}
+        self.assertIn('  · Claude Code: 2.1.0 → 2.2.0 (auto-update is off: run claude update)', cu.text(result))
+
+
+class SelfUpdateOff(unittest.TestCase):
+    """Claude Code skips its own updates when a flag is set, in its environment or in settings.json's env."""
+    FLAGS = ('DISABLE_UPDATES', 'DISABLE_AUTOUPDATER', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
+    OFF = 'auto-update is off: run claude update'
+    BLOCKED = 'updates are turned off (DISABLE_UPDATES)'
+
+    def note(self, settings=None, env=None):
+        answers = {'claude': '2.1.0 (Claude Code)', 'npm': '2.2.0'}
+        clean = {k: v for k, v in os.environ.items() if k not in self.FLAGS}
+        with tempfile.TemporaryDirectory() as home:
+            if settings is not None:
+                os.makedirs(os.path.join(home, '.claude'))
+                with open(os.path.join(home, '.claude', 'settings.json'), 'w') as f:
+                    f.write(settings if isinstance(settings, str) else json.dumps(settings))
+            rep = cu.Report({})
+            with mock.patch.object(cu, 'HOME', home), mock.patch.object(cu.shutil, 'which', lambda t: '/bin/' + t), \
+                    mock.patch.object(cu, 'run', lambda cmd, timeout=120: answers[cmd[0]]), \
+                    mock.patch.dict(os.environ, {**clean, **(env or {})}, clear=True):
+                cu.check_claude(rep)
+        self.assertEqual([i['kind'] for i in rep.items], ['self'])
+        return rep.items[0].get('note')
+
+    def test_nothing_set_keeps_the_default(self):
+        self.assertIsNone(self.note())
+        self.assertIsNone(self.note({'env': {'OTHER': '1'}}))
+
+    def test_settings_env_turns_it_off(self):
+        self.assertEqual(self.note({'env': {'DISABLE_AUTOUPDATER': '1'}}), self.OFF)
+        self.assertEqual(self.note({'env': {'DISABLE_AUTOUPDATER': True}}), self.OFF)
+
+    def test_process_env_turns_it_off(self):
+        for value in ('1', 'true', 'YES', ' on '):
+            self.assertEqual(self.note(env={'DISABLE_AUTOUPDATER': value}), self.OFF, value)
+
+    def test_other_values_leave_it_on(self):
+        for value in ('0', 'false', 'off', ''):
+            self.assertIsNone(self.note(env={'DISABLE_AUTOUPDATER': value}), value)
+
+    def test_settings_env_wins_over_the_process_env(self):
+        self.assertIsNone(self.note({'env': {'DISABLE_AUTOUPDATER': '0'}}, {'DISABLE_AUTOUPDATER': '1'}))
+
+    def test_nonessential_traffic_off_names_no_command(self):
+        # Claude Code takes any non-empty value of this one, and then claude update cannot look up a version either.
+        quiet = 'auto-update is off (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)'
+        self.assertEqual(self.note(env={'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '0'}), quiet)
+        self.assertEqual(self.note({'env': {'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1'}}), quiet)
+
+    def test_disable_updates_blocks_claude_update_too(self):
+        self.assertEqual(self.note({'env': {'DISABLE_UPDATES': '1', 'DISABLE_AUTOUPDATER': '1'}}), self.BLOCKED)
+        self.assertIsNone(self.note({'env': {'DISABLE_UPDATES': '0'}}))
+
+    def test_unreadable_settings_keep_the_default(self):
+        for settings in ('{', '[]', '{"env": null}', '{"env": ["DISABLE_AUTOUPDATER"]}', '[' * 100000 + ']' * 100000):
+            self.assertIsNone(self.note(settings), settings[:20])
+
 
 class TextOutput(unittest.TestCase):
     def test_control_characters_never_reach_the_terminal(self):

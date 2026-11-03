@@ -24,7 +24,7 @@ Homebrew, and you would rather not run four different update commands to find ou
 
 | Group | Compared against | Updated with |
 |---|---|---|
-| Claude Code | the npm registry's latest | nothing: it updates itself; shown under Info |
+| Claude Code | the npm registry's latest | nothing: it updates itself; shown under Info. With its auto-update turned off, the row says so, and names `claude update` when that can run |
 | Plugins | the version the plugin's marketplace advertises (a plugin in its own GitHub repo: that repo's `plugin.json`) | `claude plugin update <id>` |
 | Skills installed with the [skills CLI](https://www.npmjs.com/package/skills) | the skill's folder on GitHub (tree hash) | `npx --yes skills@1.7.4 update -g <id>` |
 | Homebrew formulae and casks | `brew outdated`, optionally only what your Brewfile lists | `brew upgrade <id>` (`--cask` for a cask) |
@@ -122,7 +122,9 @@ Check now (or `fetchOnOpen`) it first runs `claude plugin marketplace update` pe
 skills' metadata (`claude plugin list`, `~/.claude/plugins/known_marketplaces.json` and `marketplaces/`,
 `~/.agents/.skill-lock.json`); the Brewfile, if you set one; the known-broken list, yours or the default one
 when it exists; and the environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
-`XDG_CONFIG_HOME`, to find those files.
+`XDG_CONFIG_HOME`, to find those files. To tell whether Claude Code updates itself, it reads
+`DISABLE_UPDATES`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` from the environment
+and from the `env` block of `~/.claude/settings.json`; nothing else in that file.
 
 **Passes on:** each item's name to its update command; your marketplace names to `claude plugin marketplace
 update`; the GitHub repositories, folders and refs named in your plugin and skill metadata to `gh api`, which

@@ -47,6 +47,10 @@ EXTRA_HINT = 'check uptick.checkCommand in /config'
 # The note of a plugin that could not be compared: shown, never counted as an update.
 NOT_COMPARED = 'not compared'
 SELF_NOTE = 'updates itself; new sessions get it'
+SELF_OFF_NOTE = 'auto-update is off: run claude update'
+SELF_BLOCKED_NOTE = 'updates are turned off (DISABLE_UPDATES)'
+# This flag also stops claude update from looking up a version, so the note names no command.
+SELF_QUIET_NOTE = 'auto-update is off (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)'
 # The whole check, fetch included, ends well inside the mod's 10-minute limit on the checker; what is
 # left when time runs out becomes a problem row, and the JSON and the cache still come out.
 TOTAL_SECONDS = 420
@@ -178,6 +182,31 @@ class Report:
         self.items.append(item)
 
 
+def self_update_note():
+    """The Claude Code row's note when Claude Code skips its own updates, else None. Its flags come from its
+    environment, which the env block of ~/.claude/settings.json extends and overrides; a scheduled check
+    inherits only the first, so it reads the file too."""
+    env = dict(os.environ)
+    # shortcut: managed settings, CLAUDE_CONFIG_DIR and a lower-case key on Windows are missed; add one when a user needs it.
+    try:
+        with open(os.path.join(HOME, '.claude', 'settings.json'), encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get('env'), dict):
+            env.update(data['env'])
+    except (OSError, ValueError, RecursionError):
+        pass
+
+    def is_set(name):  # Claude Code's reading: 1, true, yes or on, in any case
+        return str(env.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    if is_set('DISABLE_UPDATES'):
+        return SELF_BLOCKED_NOTE
+    if env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') not in (None, ''):  # any value counts
+        return SELF_QUIET_NOTE
+    if is_set('DISABLE_AUTOUPDATER'):
+        return SELF_OFF_NOTE
+    return None
+
+
 def check_claude(rep):
     if not shutil.which('claude'):
         return
@@ -199,8 +228,9 @@ def check_claude(rep):
     if is_newer is None:
         rep.items.append({**item, 'kind': 'info', 'note': NOT_COMPARED})
     elif is_newer:
-        # Native installs update themselves; running sessions stay on the old binary.
-        rep.items.append({**item, 'kind': 'self'})
+        # Native installs update themselves unless a flag stops them; running sessions stay on the old binary.
+        note = self_update_note()
+        rep.items.append({**item, 'kind': 'self', **({'note': note} if note else {})})
 
 
 def advertised(mpath, name):
@@ -456,7 +486,7 @@ def text(result):
         elif is_not_compared(it):
             lines.append(f"  · {name}: {it.get('have', '?')} ({it['note']})")
         elif it['kind'] == 'self':
-            lines.append(f"  · {name}: {it.get('have', '?')} → {it.get('latest', '?')} ({SELF_NOTE})")
+            lines.append(f"  · {name}: {it.get('have', '?')} → {it.get('latest', '?')} ({it.get('note') or SELF_NOTE})")
         else:
             how = it.get('note') or HOW.get(it['kind'], it['kind']).format(id=it['id'])
             lines.append(f"  ↑ {name}: {it.get('have', '?')} → {it.get('latest', '?')}   [{how}]")
