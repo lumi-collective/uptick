@@ -40,6 +40,7 @@ const UPDATE_PREFIXES = [
   ['claude', 'plugin', 'update'],
   ['npx', '--yes', SKILLS_CLI, 'update'],
   ['brew', 'upgrade'],
+  ['uv', 'tool', 'upgrade'],
 ]
 // Windows starts npx through cmd.exe: the update is what follows it.
 const isUpdate = (argv: readonly string[]) => {
@@ -383,7 +384,16 @@ test('ids are checked before they reach argv', async ($, on) => {
   expect(SKILLS_CLI).toMatch(/^skills@\d+\.\d+\.\d+$/) // pinned: an exact version, never the latest
   expect(argvFor({ id: 'python@3.13', kind: 'brew' })).toEqual(['brew', 'upgrade', 'python@3.13'])
   expect(argvFor({ id: 'example/tap/widget', kind: 'brew', cask: true })).toEqual(['brew', 'upgrade', '--cask', 'example/tap/widget'])
+  expect(argvFor({ id: 'example_tool.cli-2', kind: 'uv' })).toEqual(['uv', 'tool', 'upgrade', 'example_tool.cli-2'])
   for (const [id, kind] of [
+    ['--reinstall', 'uv'],
+    ['a b', 'uv'],
+    ['a;b', 'uv'],
+    ['../a', 'uv'],
+    ['a/b', 'uv'],
+    ['a@1.0', 'uv'],
+    ['a==1.0', 'uv'],
+    ['x'.repeat(200), 'uv'],
     ['x; rm -rf ~', 'skill'],
     ['--force', 'brew'],
     ['-y', 'skill'],
@@ -850,6 +860,101 @@ test('a skill update that matched no installed skill is a failure, not a tick', 
   expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 0 updated · 1 failed/)
   expect((await ui.find({ type: 'Text', text: /✗ code-review/ }))?.text).toContain('No installed skills found matching')
   expect(await ui.find({ type: 'Text', text: /^Next:/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+const UV = {
+  ...RESULT,
+  items: [...RESULT.items, { id: 'example-tool', kind: 'uv', name: 'example-tool', have: '0.9.102', latest: '0.9.110' }],
+}
+
+/** Opens the pane on the UV result, picks the uv tool and confirms it. */
+async function updateUvTool($: Engine, on: On, options: Parameters<typeof world>[1] = {}) {
+  const { clock, w } = world(on, { cache: UV, checker: JSON.stringify(UV), ...options })
+  await start($)
+  // From the checker, not the cache: the fake cache sits at the POSIX home only.
+  await runCommand($)
+  await clock.settle()
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  await ui.press({ key: 'item:uv:example-tool' })
+  const runs = (await ui.find({ type: 'Text', text: /runs/ }))?.text
+  const then = await ui.find({ type: 'Text', text: /^ +then / })
+  await clock.advance(1000)
+  w.allowUpdates = true
+  await ui.press({ key: 'confirm' })
+  return { ui, w, runs, then }
+}
+
+// uv is opt-in: these tests turn it on as a person would, in kinds.
+const WITH_UV = { options: { kinds: 'plugin,skill,brew,uv' } }
+
+test('by default uv tools are not checked or shown: the checker is told the three other kinds', async ($, on) => {
+  const { clock, w } = world(on, { cache: UV, checker: JSON.stringify(UV) })
+  await start($)
+  await runCommand($)
+  await clock.settle()
+  expect(w.ran[0]?.at(-1)).toBe('--kinds=plugin,skill,brew')
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  expect(await ui.find({ key: 'item:uv:example-tool' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /uv tools/ })).toBeUndefined()
+  expect((await ui.find({ key: 'update-all' }))?.props.label).toBe('Update all (3)')
+  await ui.unmount()
+})
+
+test('a uv tool is its own group, after Homebrew, numbered on', WITH_UV, async ($, on) => {
+  world(on, { cache: UV, checker: JSON.stringify(UV) })
+  await start($)
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts.indexOf('uv tools (1)')).toBeGreaterThan(texts.indexOf('Homebrew (1)'))
+  expect(texts.indexOf('Homebrew (1)')).toBeGreaterThanOrEqual(0)
+  expect((await ui.find({ key: 'item:uv:example-tool' }))?.text).toMatch(/^example-tool +0\.9\.102 → 0\.9\.110$/)
+  expect((await ui.find({ key: 'item:uv:example-tool' }))?.props.hotkey).toBe('4')
+  expect((await ui.find({ key: 'update-all' }))?.props.label).toBe('Update all (4)')
+  await ui.unmount()
+  const row = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect((await row.find({ type: 'Text', text: /tool updates/ }))?.text).toContain('uv tools 1')
+  await row.unmount()
+  expect(report(parseResult(JSON.stringify(UV)), parseKinds('plugin,skill,brew,uv'), false, NOW)).toContain(
+    '  ↑ example-tool 0.9.102 → 0.9.110\n      uv tool upgrade example-tool',
+  )
+  // Left out of kinds, it is not offered.
+  expect(sortItems(parseResult(JSON.stringify(UV)), parseKinds('plugin,skill,brew')).updatable.map(i => i.kind)).not.toContain('uv')
+})
+
+test('a confirmed uv tool runs uv tool upgrade <name>, from home, with no extra env', WITH_UV, async ($, on) => {
+  const { ui, w, runs, then } = await updateUvTool($, on)
+  expect(runs).toBe('  runs   uv tool upgrade example-tool')
+  expect(then).toBeUndefined()
+  expect(w.updates()).toEqual([['uv', 'tool', 'upgrade', 'example-tool']])
+  const at = w.ran.findIndex(isUpdate)
+  expect(w.cwds[at]).toBe(HOME)
+  expect(w.inits[at]?.stdin).toBe('')
+  expect(w.inits[at]?.env).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 1 updated/)
+  await ui.unmount()
+})
+
+test('Windows: uv is a native exe, so its upgrade runs without cmd.exe', WITH_UV, async ($, on) => {
+  const { ui, w } = await updateUvTool($, on, { env: { USERPROFILE: WIN_HOME, OS: 'Windows_NT' } })
+  expect(w.updates()).toEqual([['uv', 'tool', 'upgrade', 'example-tool']])
+  expect(w.cwds[w.ran.findIndex(isUpdate)]).toBe(WIN_HOME)
+  await ui.unmount()
+})
+
+test('a uv upgrade held by an exact pin is a failure that shows uv hint, not a tick', WITH_UV, async ($, on) => {
+  const says = 'Nothing to upgrade\n\nhint: `example-tool` is pinned to `0.9.102` (installed with an exact version pin); reinstall with `uv tool install example-tool@latest` to upgrade to a new version.'
+  const { ui } = await updateUvTool($, on, { says: { 'example-tool': says } })
+  expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 0 updated · 1 failed/)
+  expect((await ui.find({ type: 'Text', text: /✗ example-tool/ }))?.text).toContain('hint: `example-tool` is pinned to `0.9.102`')
+  await ui.unmount()
+})
+
+// What uv 0.13.7 prints for a tool that is current already (updated between the check and the confirm).
+test('a uv upgrade with Nothing to upgrade and no pin hint is a tick', WITH_UV, async ($, on) => {
+  const { ui } = await updateUvTool($, on, { says: { 'example-tool': 'Nothing to upgrade' } })
+  expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 1 updated/)
+  expect(await ui.find({ type: 'Text', text: /✓ example-tool/ })).toBeDefined()
   await ui.unmount()
 })
 

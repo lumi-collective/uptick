@@ -7,7 +7,7 @@
 
 # Optional parameters:
 # @raycast.packageName Uptick
-# @raycast.description What has an update: Claude Code, plugins, skills and Homebrew. Read-only, no fetch.
+# @raycast.description What has an update: Claude Code, plugins, skills, Homebrew and uv tools. Read-only, no fetch.
 
 # Linked into the Raycast script folder, this finds the clone through the link.
 here=$(dirname "$(readlink -f "$0")")

@@ -71,6 +71,106 @@ class Brewfile(unittest.TestCase):
         self.assertEqual((rep.items, rep.problems, rep.skipped), ([], [], ['Homebrew not found, skipped']))
 
 
+class UvTools(unittest.TestCase):
+    # As uv 0.13.7 prints it with --show-version-specifiers: a tool line, then one `- ` line per executable.
+    OUTDATED = ('example-tool v0.9.102 [latest: 0.9.110]\n- example-tool\n- example-tool-mcp\n'
+                'black v24.2.0 [required: >=24] [latest: 24.3.0]\n- black\n- blackd')
+    # Real lines (uv 0.13.7, a throwaway tool folder) of installs uv tool upgrade cannot move to `latest`.
+    HELD = ('httpie v1.0.0 [required: file:///nonexistent/httpie] [latest: 3.2.4]\n- http\n'
+            'ruff v0.1.0 [required:  git+https://github.com/astral-sh/ruff] [latest: 0.17.3]\n- ruff\n'
+            'cowsay v5.0 [required: ==5.0] [latest: 6.1]\n- cowsay')
+    # Real (uv 0.13.7, `uv tool install 'cowsay<6'` in a throwaway tool folder): uv tool upgrade stays in the range.
+    RANGED = 'cowsay v5.0 [required: <6] [latest: 6.1]\n- cowsay'
+    NO_FLAG = "error: unexpected argument '--outdated' found\n\nUsage: uv tool list [OPTIONS]\n"
+    OFFLINE = ('error: Failed to fetch: https://pypi.org/simple/cowsay/\n'
+               '  cause: error sending request for url (https://pypi.org/simple/cowsay/)\n'
+               '  cause: Connection refused (os error 61)\n')
+
+    def uv_items(self, out, which=lambda t: '/bin/' + t, stderr='', known_broken=None):
+        rep, ran = cu.Report(known_broken or {}), []
+
+        def fake(cmd, timeout=120, err=None):
+            ran.append(cmd)
+            if err is not None:
+                err.append(stderr)
+            return out
+        with mock.patch.object(cu, 'run', fake), mock.patch.object(cu.shutil, 'which', which):
+            cu.check_uv(rep)
+        return rep, ran
+
+    def test_outdated_tools_are_items(self):
+        rep, ran = self.uv_items(self.OUTDATED)
+        self.assertEqual(ran, [['uv', 'tool', 'list', '--outdated', '--show-version-specifiers', '--color', 'never']])
+        self.assertEqual(rep.items, [
+            {'id': 'example-tool', 'kind': 'uv', 'name': 'example-tool', 'have': '0.9.102', 'latest': '0.9.110'},
+            {'id': 'black', 'kind': 'uv', 'name': 'black', 'have': '24.2.0', 'latest': '24.3.0'}])
+        self.assertEqual((rep.checked, rep.problems), (['uv tools'], []))
+
+    def test_installs_upgrade_cannot_move_are_not_compared(self):
+        rep, _ = self.uv_items(self.HELD)
+        self.assertEqual([(i['id'], i['kind'], i['have'], i['latest'], i['note']) for i in rep.items], [
+            ('httpie', 'info', '1.0.0', '?', 'not compared: installed from file:///nonexistent/httpie'),
+            ('ruff', 'info', '0.1.0', '?', 'not compared: installed from git+https://github.com/astral-sh/ruff'),
+            ('cowsay', 'info', '5.0', '6.1', 'not compared: installed as ==5.0, which uv tool upgrade keeps')])
+        self.assertEqual(rep.problems, [])
+        # Not updates: alone they exit 0, so the daily check does not notify.
+        result = {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [], 'items': rep.items}
+        with mock.patch.object(cu, 'check', lambda *a: result), mock.patch('sys.stdout', new_callable=io.StringIO):
+            self.assertEqual(cu.main([]), 0)
+
+    def test_a_range_is_offered_and_only_an_exact_pin_is_held(self):
+        self.assertEqual(self.uv_items(self.RANGED)[0].items,
+                         [{'id': 'cowsay', 'kind': 'uv', 'name': 'cowsay', 'have': '5.0', 'latest': '6.1'}])
+        lines = '\n'.join(f'tool{n} v1.0 [required: {spec}] [latest: 2.0]' for n, spec in enumerate(
+            ['<=1.5', '!=2.0', '~=1.0', '>=1,<2', '==1.*', '==1.0', '===1.0']))
+        self.assertEqual([i['kind'] for i in self.uv_items(lines)[0].items], ['uv'] * 5 + ['info'] * 2)
+
+    def test_nothing_outdated_is_no_items(self):
+        rep, _ = self.uv_items('')
+        self.assertEqual((rep.items, rep.problems, rep.checked), ([], [], ['uv tools']))
+
+    def test_lines_of_another_shape_are_skipped(self):
+        rep, _ = self.uv_items('example-tool v1.0 [latest: 2.0]\nwarning: something\nx v1\n\x1b[1my v1 [latest: 2]\x1b[0m')
+        self.assertEqual([(i['id'], i['have'], i['latest']) for i in rep.items], [('example-tool', '1.0', '2.0')])
+
+    def test_missing_uv_is_skipped(self):
+        rep, ran = self.uv_items(self.OUTDATED, which=lambda t: None)
+        self.assertEqual((rep.items, rep.problems, ran), ([], [], []))
+        self.assertEqual(rep.skipped, ['uv not found, skipped'])
+
+    def test_a_uv_without_outdated_is_skipped_with_how_to_turn_it_off(self):
+        rep, _ = self.uv_items(None, stderr=self.NO_FLAG)
+        self.assertEqual((rep.items, rep.problems), ([], []))
+        self.assertEqual(rep.skipped, ['uv < 0.10.10: update it, or drop uv from kinds'])
+        self.assertLessEqual(len(rep.skipped[0]), 56)  # whole in the 64-column pane, after its indent
+
+    def test_a_network_failure_is_an_offline_problem(self):
+        rep, _ = self.uv_items(None, stderr=self.OFFLINE)
+        self.assertEqual(rep.problems, [{'text': 'uv tools not checked: Failed to fetch: https://pypi.org/simple/cowsay/',
+                                         'offline': True}])
+
+    def test_another_failure_is_a_problem(self):
+        self.assertEqual(self.uv_items(None, stderr='error: Failed to parse `uv.toml`\n')[0].problems,
+                         [{'text': 'uv tools not checked: Failed to parse `uv.toml`'}])
+        self.assertEqual(self.uv_items(None)[0].problems, [{'text': 'uv tools not checked: uv tool list failed'}])
+
+    def test_known_broken_holds_back_a_uv_version(self):
+        rep, _ = self.uv_items(self.OUTDATED, known_broken={'black': {'match': '24.3', 'kind': 'uv', 'note': 'breaks'}})
+        self.assertEqual([i['kind'] for i in rep.items], ['uv', 'broken'])
+
+    def test_run_hands_back_stderr(self):
+        failed = subprocess.CompletedProcess([], 2, stdout='', stderr='error: boom\n')
+        err = []
+        with mock.patch.object(cu.subprocess, 'run', return_value=failed):
+            self.assertIsNone(cu.run(['uv'], err=err))
+        self.assertEqual(err, ['error: boom\n'])
+
+    def test_text_names_the_upgrade_command(self):
+        result = {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [],
+                  'items': [{'id': 'example-tool', 'kind': 'uv', 'name': 'example-tool', 'have': '1.0', 'latest': '1.1'}]}
+        self.assertIn('  ↑ example-tool: 1.0 → 1.1   [uv tool upgrade example-tool]', cu.text(result))
+
+
 class KnownBroken(unittest.TestCase):
     def setUp(self):
         self.rep = cu.Report(cu.load_known_broken(os.path.join(DATA, 'known-broken.json')))
@@ -110,7 +210,7 @@ class KnownBroken(unittest.TestCase):
 
     def test_missing_named_file_is_a_problem(self):
         with mock.patch.multiple(cu, check_claude=lambda r: None, check_plugins=lambda r, f: None,
-                                 check_skills=lambda r: None, check_brew=lambda r, f, b: None):
+                                 check_skills=lambda r: None, check_brew=lambda r, f, b: None, check_uv=lambda r: None):
             result = cu.check(known_broken=os.path.join(DATA, 'missing.json'))
         self.assertIn('known-broken list not readable', result['problems'][0]['text'])
 
@@ -285,7 +385,8 @@ class Robustness(unittest.TestCase):
         def brew(rep, fetch, brewfile):
             rep.items.append({'id': 'gh', 'kind': 'brew', 'name': 'gh', 'have': '1', 'latest': '2'})
 
-        with mock.patch.multiple(cu, check_claude=boom, check_plugins=lambda r, f: None, check_skills=boom, check_brew=brew):
+        with mock.patch.multiple(cu, check_claude=boom, check_plugins=lambda r, f: None, check_skills=boom, check_brew=brew,
+                                 check_uv=lambda r: None):
             result = cu.check()
         self.assertEqual([p['text'] for p in result['problems']],
                          ['Claude Code not checked: RuntimeError: boom', 'skills not checked: RuntimeError: boom'])
@@ -337,12 +438,16 @@ class Kinds(unittest.TestCase):
     def test_excluded_kinds_are_not_checked(self):
         ran = []
         with mock.patch.multiple(cu, check_claude=lambda r: ran.append('claude'), check_plugins=lambda r, f: ran.append('plugin'),
-                                 check_skills=lambda r: ran.append('skill'), check_brew=lambda r, f, b: ran.append('brew')):
+                                 check_skills=lambda r: ran.append('skill'), check_brew=lambda r, f, b: ran.append('brew'),
+                                 check_uv=lambda r: ran.append('uv')):
             cu.check(kinds={'skill'})
             self.assertEqual(ran, ['claude', 'skill'])
             ran.clear()
+            cu.check(kinds={'uv'})
+            self.assertEqual(ran, ['claude', 'uv'])
+            ran.clear()
             cu.check()
-            self.assertEqual(ran, ['claude', 'plugin', 'skill', 'brew'])
+            self.assertEqual(ran, ['claude', 'plugin', 'skill', 'brew', 'uv'])
 
     def test_kinds_flag(self):
         seen = []
@@ -356,7 +461,9 @@ class Kinds(unittest.TestCase):
             cu.main(['--kinds=plugin, brew'])
             cu.main(['--kinds='])
             cu.main([])
-        self.assertEqual(seen, [{'plugin', 'brew'}, set(), None])
+            cu.main(['--kinds=uv'])
+        # uv is opt-in: without --kinds it is not checked, so no tool names go to the index unasked.
+        self.assertEqual(seen, [{'plugin', 'brew'}, set(), {'plugin', 'skill', 'brew'}, {'uv'}])
 
     def test_unknown_kind_is_reported(self):
         seen = []
@@ -372,7 +479,7 @@ class Kinds(unittest.TestCase):
         problems = json.loads(out.getvalue())['problems']
         self.assertEqual(len(problems), 1)
         # The exact text also proves the empty entry between the two commas is not reported.
-        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew)')
+        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew, uv)')
         self.assertEqual(problems[0]['hint'], 'fix kinds in /config, UPTICK_KINDS or --kinds')
         self.assertEqual(code, 2)
 
@@ -625,7 +732,7 @@ class InSync(unittest.TestCase):
         logic, menu = self.read('plugin', 'hooks', 'logic.ts'), self.read('extras', 'macos', 'swiftbar', 'uptick.5m.py')
         pin = r"SKILLS_CLI = '([^']+)'"
         self.assertEqual({re.search(pin, logic).group(1), re.search(pin, menu).group(1)}, {cu.SKILLS_CLI})
-        for name in ('PLUGIN_ID', 'SKILL_ID', 'BREW_ID'):
+        for name in ('PLUGIN_ID', 'SKILL_ID', 'BREW_ID', 'UV_ID'):
             ts = re.search(name + r' = /\^(.+)\$/', logic).group(1).replace('\\/', '/')  # a JS literal escapes /
             py = re.search(name + r" = re\.compile\(r'(.+)'\)", menu).group(1)
             self.assertEqual(ts, py, name)

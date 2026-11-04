@@ -3,7 +3,8 @@
 
 Checks Claude Code (vs the npm registry's latest), installed Claude Code plugins (vs the version
 their marketplace advertises), skills-CLI skills (~/.agents/.skill-lock.json tree hash vs GitHub,
-through gh) and Homebrew. A check whose tool or file is absent is skipped.
+through gh), Homebrew and uv tools (uv tool list --outdated, which asks the package index).
+A check whose tool or file is absent is skipped.
 
 Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
                         [--known-broken PATH] [--extra COMMAND] [--kinds LIST]
@@ -15,7 +16,7 @@ Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
                        that upstream version is a note, not an update; `kind` (optional) narrows the entry
                        (default: ~/.config/uptick/known-broken.json, when it exists)
   --extra COMMAND      run COMMAND (split like a shell, run without one) and merge the JSON it prints
-  --kinds LIST         comma list of plugin, skill, brew: check only these (default: all)
+  --kinds LIST         comma list of plugin, skill, brew, uv: check only these (default: plugin, skill, brew)
 Exit code: 0 = all current, 1 = updates available, 2 = only problems. Known-broken notes,
 `not compared` items and self-updating tools are not updates.
 """
@@ -34,7 +35,9 @@ from datetime import datetime
 from urllib.parse import quote
 
 HOME = os.path.expanduser('~')
-KINDS = ('plugin', 'skill', 'brew')
+KINDS = ('plugin', 'skill', 'brew', 'uv')
+# uv is opt-in: its check sends the name of every uv tool to the package index.
+DEFAULT_KINDS = ('plugin', 'skill', 'brew')
 # The skills CLI the mod runs, pinned (hooks/logic.ts SKILLS_CLI).
 SKILLS_CLI = 'skills@1.7.4'
 # The mod builds the real argv from its own templates; these are only hints in the text output.
@@ -42,6 +45,7 @@ HOW = {
     'plugin': 'claude plugin update {id}',
     'skill': 'npx --yes ' + SKILLS_CLI + ' update -g {id}',
     'brew': 'brew upgrade {id}',
+    'uv': 'uv tool upgrade {id}',
 }
 EXTRA_HINT = 'check uptick.checkCommand in /config'
 # The note of a plugin that could not be compared: shown, never counted as an update.
@@ -81,8 +85,9 @@ def out_of_time():
     return time_left(1) < 1
 
 
-def run(cmd, timeout=120):
-    """stdout of a command that exited 0, else None (missing tool, failure, timeout, or out of time)."""
+def run(cmd, timeout=120, err=None):
+    """stdout of a command that exited 0, else None (missing tool, failure, timeout, or out of time).
+    err: a list that gets the command's stderr, when it ran."""
     timeout = time_left(timeout)
     if timeout < 1:
         return None
@@ -91,6 +96,8 @@ def run(cmd, timeout=120):
         r = subprocess.run([shutil.which(cmd[0]) or cmd[0], *cmd[1:]], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
+    if err is not None:
+        err.append(r.stderr)
     return r.stdout.strip() if r.returncode == 0 else None
 
 
@@ -393,6 +400,43 @@ def check_brew(rep, fetch, brewfile):
     rep.checked.append('Homebrew')
 
 
+# A tool line of uv tool list (uv 0.10.10+): `name v1.2.0 [required: <spec>] [latest: 1.3.0]`, the
+# required part only for an install with a specifier or a source; its `- ` lines name executables.
+UV_TOOL = re.compile(r'(\S+) v(\S+)(?: \[required: ([^\]]*)\])? \[latest: ([^\]\s]+)\]')
+
+
+def check_uv(rep):
+    if not shutil.which('uv'):
+        rep.skipped.append('uv not found, skipped')
+        return
+    err = []
+    out = run(['uv', 'tool', 'list', '--outdated', '--show-version-specifiers', '--color', 'never'], timeout=120, err=err)
+    if out is None:
+        stderr = ''.join(err)
+        if 'unexpected argument' in stderr:  # a uv from before --outdated
+            rep.skipped.append('uv < 0.10.10: update it, or drop uv from kinds')
+        elif not out_of_time():
+            first = re.sub(r'^error: ', '', (stderr.strip().splitlines() or ['uv tool list failed'])[0])
+            rep.problem(f'uv tools not checked: {first}', offline='Failed to fetch' in stderr)
+        return
+    for line in out.splitlines():
+        m = UV_TOOL.fullmatch(line.strip())
+        if not m:
+            continue
+        name, have, spec, latest = m.group(1), m.group(2), (m.group(3) or '').strip(), m.group(4)
+        # uv compares by name with the index's latest, but uv tool upgrade keeps an install's source and an
+        # exact pin: such a row would never clear. A range is offered: its upgrade moves within the range.
+        if '://' in spec:  # git, a URL, a wheel or a folder: uv prints each as a URL
+            rep.items.append({'id': name, 'kind': 'info', 'name': name, 'have': have, 'latest': '?',
+                              'note': f'{NOT_COMPARED}: installed from {spec}'})
+        elif '==' in spec and '*' not in spec:
+            rep.items.append({'id': name, 'kind': 'info', 'name': name, 'have': have, 'latest': latest,
+                              'note': f'{NOT_COMPARED}: installed as {spec}, which uv tool upgrade keeps'})
+        else:
+            rep.offer({'id': name, 'kind': 'uv', 'name': name, 'have': have, 'latest': latest}, latest)
+    rep.checked.append('uv tools')
+
+
 def merge_extra(rep, command):
     """Runs the extra command and merges its JSON (same schema); a failure is one problem row."""
     try:
@@ -441,6 +485,7 @@ def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None)
         ('plugin', 'plugins', lambda: check_plugins(rep, fetch)),
         ('skill', 'skills', lambda: check_skills(rep)),
         ('brew', 'Homebrew', lambda: check_brew(rep, fetch, brewfile)),
+        ('uv', 'uv tools', lambda: check_uv(rep)),
         (None, 'extra check', lambda: merge_extra(rep, extra) if extra else None),
     ]
     DEADLINE = time.monotonic() + TOTAL_SECONDS
@@ -508,7 +553,7 @@ def main(argv=None):
     ap.add_argument('--kinds')
     args = ap.parse_args(argv)
     listed = None if args.kinds is None else {k.strip() for k in args.kinds.split(',')} - {''}
-    kinds = None if listed is None else listed & set(KINDS)
+    kinds = set(DEFAULT_KINDS) if listed is None else listed & set(KINDS)
     result = check(args.fetch, args.brewfile, args.known_broken, args.extra, kinds)
     unknown = ', '.join(f'"{k}"' for k in sorted(listed - set(KINDS))) if listed else ''
     if unknown:

@@ -12,13 +12,13 @@
 ![Uptick opens with /uptick, lists the updates by group, and updates one after the confirm step](media/demo.gif)
 
 Uptick is a Claude Code mod. `/uptick` opens a pane that lists what has a newer version: Claude Code
-itself, your plugins, your skills and your Homebrew packages. Pick one, or press `a` for all, check the
+itself, your plugins, your skills, your Homebrew packages and, if you turn them on, your uv tools. Pick one, or press `a` for all, check the
 exact command it will run, and confirm. A line above the prompt tells you when updates are waiting.
 
 ## Who it's for
 
 You use Claude Code every day, you have plugins from a few marketplaces, skills from GitHub, and tools from
-Homebrew, and you would rather not run four different update commands to find out what changed.
+Homebrew and uv, and you would rather not run five different update commands to find out what changed.
 
 ## What it checks
 
@@ -28,6 +28,7 @@ Homebrew, and you would rather not run four different update commands to find ou
 | Plugins | the version the plugin's marketplace advertises (a plugin in its own GitHub repo: that repo's `plugin.json`) | `claude plugin update <id>` |
 | Skills installed with the [skills CLI](https://www.npmjs.com/package/skills) | the skill's folder on GitHub (tree hash) | `npx --yes skills@1.7.4 update -g <id>` |
 | Homebrew formulae and casks | `brew outdated`, optionally only what your Brewfile lists | `brew upgrade <id>` (`--cask` for a cask) |
+| Tools installed with `uv tool install`, off until you add `uv` to `kinds` | `uv tool list --outdated`, which asks PyPI (or the index you set for uv) | `uv tool upgrade <name>` |
 | Your own checks | whatever your command prints | nothing: shown under Info |
 
 A check whose tool is missing is skipped. A plugin whose version is not a version (a git hash, or none
@@ -43,7 +44,8 @@ advertised) is listed under Info as `not compared`, never offered.
 - Optional, each enabling one check:
   - **npm**: compares Claude Code with the registry, and runs skill updates through `npx`;
   - **gh**, signed in: compares skills, and plugins kept in their own GitHub repo;
-  - **Homebrew**: the Homebrew group.
+  - **Homebrew**: the Homebrew group;
+  - **uv** 0.10.10 or newer: the uv tools group, once you add `uv` to `kinds` (see [Settings](#settings)).
 
 ## Where it works
 
@@ -114,13 +116,15 @@ Under `claude -p "/uptick"` you get a plain-text report and nothing is installed
 **Runs to check, read-only:** the checker, `plugin/checker/check_updates.py`, with `python3` (on Windows,
 `py -3`), when the pane opens, when you press Check now, again after each run of confirmed updates, and for
 `claude -p "/uptick"`. It asks `claude`,
-`npm`, `gh` and `brew` for installed and latest versions, and runs your `checkCommand` if you set one. With
+`npm`, `gh`, `brew` and, when `uv` is in `kinds`, `uv` (`uv tool list --outdated`) for installed and latest versions, and runs your
+`checkCommand` if you set one. With
 Check now (or `fetchOnOpen`) it first runs `claude plugin marketplace update` per marketplace and
 `brew update`.
 
 **Reads:** its cache file, `${XDG_CACHE_HOME:-~/.cache}/uptick/last.json`; your installed plugins' and
 skills' metadata (`claude plugin list`, `~/.claude/plugins/known_marketplaces.json` and `marketplaces/`,
-`~/.agents/.skill-lock.json`); the Brewfile, if you set one; the known-broken list, yours or the default one
+`~/.agents/.skill-lock.json`); the list of your uv tools, with the version specifier or source each was
+installed with (`uv tool list --outdated --show-version-specifiers`); the Brewfile, if you set one; the known-broken list, yours or the default one
 when it exists; and the environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
 `XDG_CONFIG_HOME`, to find those files. To tell whether Claude Code updates itself, it reads
 `DISABLE_UPDATES`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` from the environment
@@ -152,6 +156,9 @@ administrator password fails at once instead of waiting for one; run it in a ter
 
 - the npm registry: the latest Claude Code version (`npm view`);
 - the GitHub API through `gh`: skill folders and plugin manifests;
+- only when `uv` is in `kinds`: PyPI, or the package index you set for uv, through `uv tool list
+  --outdated`: the name of every uv tool, on every check, also of one installed from git, a URL or a folder
+  (shown as `not compared`), for its latest version;
 - with **Check now** or `fetchOnOpen`: `claude plugin marketplace update` per marketplace and `brew update`;
 - and when you confirm an update, whatever that tool fetches.
 
@@ -164,7 +171,7 @@ In `/config`, or at install with `--config <key>=<value>`:
 
 | Key | Values | Default | What it does |
 |---|---|---|---|
-| `kinds` | comma list of `plugin`, `skill`, `brew` | `plugin,skill,brew` | which groups to check and update; a group left out is not checked at all |
+| `kinds` | comma list of `plugin`, `skill`, `brew`, `uv` | `plugin,skill,brew` | which groups to check and update; a group left out is not checked at all. `uv` is off by default: add it here, in `UPTICK_KINDS` or with `--kinds`, and the name of every uv tool then goes to PyPI (or your uv index) on every check |
 | `brewfile` | a path | empty | list only the outdated packages this Brewfile names |
 | `knownBroken` | a path | empty: `${XDG_CONFIG_HOME:-~/.config}/uptick/known-broken.json` if it exists | upstream versions to hold back |
 | `checkCommand` | a command | empty | your own check, merged into the list |
@@ -185,7 +192,7 @@ upstream moves past it.
 
 A skill's `match` is the start of its upstream tree hash. A version's `match` is the version, or its
 start up to a non-digit: `1.1` holds back `1.1` and `1.1.3`, not `1.10.0`. `kind` (`plugin`, `skill`,
-`brew`) is optional and limits the entry to that kind.
+`brew`, `uv`) is optional and limits the entry to that kind.
 
 ## Your own checks
 
@@ -206,8 +213,7 @@ print(json.dumps({'checked': ['mise'], 'items': [
 ```
 
 Set `checkCommand` to `python3 -I /path/to/mise_check.py`. `npm outdated -g --json` has the same `current`
-and `latest` per package, so the same script works for it with that command swapped in. `uv tool list
---outdated` prints text, one tool per line, for a script to read the same way.
+and `latest` per package, so the same script works for it with that command swapped in.
 
 ### The checker's JSON
 
@@ -289,10 +295,20 @@ shows what is new around Claude Code and updates one item at a time, after you c
 
 ## Limits and not supported
 
-- Package managers other than Homebrew: winget, scoop, choco, apt, pacman, nix, pip and uv. Add them with
-  `checkCommand`.
+- Package managers other than Homebrew and uv tools: winget, scoop, choco, apt, pacman, nix and pip. Add them
+  with `checkCommand`.
 - Pinned Homebrew packages are left out.
-- An entry in `kinds` that is not `plugin`, `skill` or `brew` (a typo such as `skill;`) is ignored, so the group you
+- A uv tool installed from git, a URL or a folder, or with an exact pin (`name==1.0`), is shown under Info
+  as `not compared`, never offered: `uv tool upgrade` keeps its source or pin. Reinstall it with
+  `uv tool install name@latest` to follow the latest again.
+- A uv tool installed with a range (`name<6`, `<=`, `~=`, `!=`) is offered, and `uv tool upgrade` stays
+  inside the range. uv lists it against the index's overall latest, so when nothing newer exists inside the
+  range the update shows as done and the row comes back on the next check.
+- A pin set with `uv tool install -c` (constraints) or `--overrides` does not show in `uv tool list`, so the
+  tool is offered. With a constraint pin, `uv tool upgrade` prints its pin hint and the pane shows a failure;
+  with an override pin it only says "Nothing to upgrade", the pane shows it as done, and the row comes back on
+  the next check.
+- An entry in `kinds` that is not `plugin`, `skill`, `brew` or `uv` (a typo such as `skill;`) is ignored, so the group you
   meant is not checked. The result shows a problem row that names the entry.
 - `claude plugin update` runs from your home folder, so a plugin installed at project or local scope may
   not update from the pane; run it in that project.

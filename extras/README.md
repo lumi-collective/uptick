@@ -32,8 +32,11 @@ UPTICK_CHECK_COMMAND="python3 -I /path/to/my_check.py"
 UPTICK_KINDS=plugin,skill,brew
 ```
 
+Add `uv` to `UPTICK_KINDS` to check uv tools too; the name of every uv tool then goes to PyPI (or your uv
+index) on every check.
+
 A scheduler starts it with a bare PATH; it adds `~/.local/bin` and the usual Homebrew folders. If your
-`claude`, `npm` or `brew` live elsewhere, set `UPTICK_PATH` in the same file.
+`claude`, `npm`, `brew` or `uv` live elsewhere, set `UPTICK_PATH` in the same file.
 
 ### macOS: launchd
 

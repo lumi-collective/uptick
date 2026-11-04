@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A new kind, `uv`: tools installed with `uv tool install`, from `uv tool list --outdated` (uv 0.10.10+, asks
+  PyPI), updated with `uv tool upgrade <name>`; off by default, on when `uv` is in `kinds`. A tool installed
+  from git, a folder, or an exact pin shows under Info as `not compared`; one with a range, or pinned through
+  `-c`/`--overrides` (which uv's list does not show), is offered.
 - An unknown entry in `kinds` (such as `skill;`) now shows a problem row instead of being dropped silently.
 - The Claude Code row no longer says "updates itself" when its auto-update is off (`DISABLE_UPDATES`,
   `DISABLE_AUTOUPDATER` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, in the environment or in

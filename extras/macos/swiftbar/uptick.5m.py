@@ -1,6 +1,6 @@
 #!/usr/bin/env -S python3 -I
 # <swiftbar.title>Uptick</swiftbar.title>
-# <swiftbar.desc>Tool updates for Claude Code, plugins, skills and Homebrew, from Uptick's cache.</swiftbar.desc>
+# <swiftbar.desc>Tool updates for Claude Code, plugins, skills, Homebrew and uv tools, from Uptick's cache.</swiftbar.desc>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 """SwiftBar plugin: Uptick in the menu bar.
@@ -22,7 +22,7 @@ from pathlib import Path
 SELF = Path(__file__).resolve()
 CHECK = SELF.parent.parent.parent.parent / 'plugin' / 'bin' / 'uptick-check'
 CACHE = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'uptick' / 'last.json'
-# SwiftBar starts plugins with a bare PATH: add where claude, brew and npx usually live.
+# SwiftBar starts plugins with a bare PATH: add where claude, brew, npx and uv usually live.
 PATH = os.pathsep.join([str(Path.home() / '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', os.environ.get('PATH', '')])
 
 # The same templates and id patterns as plugin/hooks/logic.ts: the id reaches a command line.
@@ -30,8 +30,9 @@ SKILLS_CLI = 'skills@1.7.4'
 PLUGIN_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}@[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 SKILL_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 BREW_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}(/[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}){0,2}')
+UV_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 UPDATE_ENV = {'skill': {'DISABLE_TELEMETRY': '1', 'DO_NOT_TRACK': '1'}}
-GROUPS = [('plugin', 'Plugins'), ('skill', 'Skills'), ('brew', 'Homebrew')]
+GROUPS = [('plugin', 'Plugins'), ('skill', 'Skills'), ('brew', 'Homebrew'), ('uv', 'uv tools')]
 NOTE_GROUPS = [(('broken',), 'Known issues', 'exclamationmark.triangle'), (('self', 'info'), 'Info', 'info.circle')]
 
 
@@ -42,6 +43,8 @@ def argv_for(kind, id_, cask=False):
         return ['npx', '--yes', SKILLS_CLI, 'update', '-g', id_]
     if kind == 'brew' and BREW_ID.fullmatch(id_):
         return ['brew', 'upgrade', *(['--cask'] if cask else []), id_]
+    if kind == 'uv' and UV_ID.fullmatch(id_):
+        return ['uv', 'tool', 'upgrade', id_]
     return None
 
 
@@ -123,8 +126,9 @@ def self_test():
     assert argv_for('brew', 'example/tap/widget')
     assert argv_for('plugin', 'example-plugin@example-market') == ['claude', 'plugin', 'update', 'example-plugin@example-market']
     assert argv_for('skill', 'example-skill') == ['npx', '--yes', SKILLS_CLI, 'update', '-g', 'example-skill']
+    assert argv_for('uv', 'example-tool') == ['uv', 'tool', 'upgrade', 'example-tool']
     for kind, bad in [('brew', '-x'), ('brew', 'a;b'), ('brew', '../x'), ('skill', 'a b'), ('plugin', 'noat'),
-                      ('skill', 'x' * 200), ('broken', 'x'), ('info', 'x')]:
+                      ('skill', 'x' * 200), ('broken', 'x'), ('info', 'x'), ('uv', '--x'), ('uv', 'a/b'), ('uv', 'a b')]:
         assert argv_for(kind, bad) is None, (kind, bad)
     assert clean('a|b\nc\x1b[2J') == 'a b c [2J'
     now = datetime.fromisoformat('2026-01-01T18:00:00+00:00')
@@ -134,12 +138,13 @@ def self_test():
         {'id': 'example-tool', 'kind': 'brew', 'name': 'example-tool', 'have': '1', 'latest': '2'},
         {'id': 'bad;id', 'kind': 'brew', 'name': 'bad', 'have': '1', 'latest': '2'},
         {'id': 'r', 'kind': 'broken', 'name': 'r', 'note': 'n', 'detail': 'd'},
-        {'id': 'lint@example', 'kind': 'plugin', 'name': 'lint@example', 'have': '1', 'latest': '2'}]}, now)
-    assert m[0].startswith('2 '), m[0]  # info and known issues are not counted
+        {'id': 'lint@example', 'kind': 'plugin', 'name': 'lint@example', 'have': '1', 'latest': '2'},
+        {'id': 'example-cli', 'kind': 'uv', 'name': 'example-cli', 'have': '1', 'latest': '2'}]}, now)
+    assert m[0].startswith('3 '), m[0]  # info and known issues are not counted
     assert m[2].startswith('Uptick · checked 13:24 |'), m[2]
     assert m[3].startswith('p (run gh auth login) |'), m[3]
     heads = [line.split(' |')[0] for line in m if line.endswith('color=gray size=11') and '(' in line]
-    assert heads == ['Plugins (1)', 'Homebrew (1)', 'Known issues (1)', 'Info (2)'], heads
+    assert heads == ['Plugins (1)', 'Homebrew (1)', 'uv tools (1)', 'Known issues (1)', 'Info (2)'], heads
     assert any(line.startswith('Claude Code  1 → 2  updates itself |') for line in m), m
     assert any(line.startswith('notes@example  0000000 → ?  not compared |') for line in m), m
     assert checked_at('2025-12-30T08:30:00+00:00', now) == '12-30 08:30'

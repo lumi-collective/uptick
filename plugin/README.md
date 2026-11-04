@@ -2,7 +2,8 @@
 
 Uptick shows what is out of date around Claude Code and updates it only after you confirm the exact
 command. Type /uptick to open a pane that lists newer versions of Claude Code itself, your plugins, the
-skills you installed with the skills CLI, and your Homebrew packages. Pick one item, or all of them, read
+skills you installed with the skills CLI, your Homebrew packages, and, if you turn them on, the tools you
+installed with uv tool install. Pick one item, or all of them, read
 the command it will run, and confirm. A line above the prompt tells you when updates are waiting.
 
 ## Where it works
@@ -16,11 +17,13 @@ the web or on mobile, or in Cowork.
 
 - When the pane opens, when you press Check now, again after each run of confirmed updates, and for a
   claude -p "/uptick" report: the bundled checker, with python3 (on Windows, the py launcher). The
-  checker asks claude, npm, gh and brew for installed and latest versions. It reads only; with Check now
+  checker asks claude, npm, gh, brew and, when uv is in the kinds setting, uv (uv tool list --outdated) for
+  installed and latest versions. It reads only; with Check now
   (or on every open, if you turn on fetchOnOpen) it first refreshes marketplace and Homebrew metadata.
 - Only after you press Update in the confirm step: one fixed command per item, built from a template and
   the item's name, which must match a strict pattern. A plugin updates through claude, a skill through
-  npx running the skills CLI (pinned to version 1.7.4), a Homebrew package through brew. Each runs from
+  npx running the skills CLI (pinned to version 1.7.4), a Homebrew package through brew, a uv tool
+  through uv tool upgrade. Each runs from
   your home folder, as an argument list without a shell; on Windows, npx and claude start through cmd.exe.
 - Reload plugins never runs anything: it only types /reload-plugins into your prompt, and you press Enter.
 - Your own extra check command, if you set one in the settings.
@@ -35,13 +38,14 @@ PATH.
 ## What it reads
 
 Its own cache file (the last result, in your cache folder), the metadata of your installed plugins and
-skills, a Brewfile if you set one, and a known-broken list if you set one or the default file exists in
+skills, the list of your uv tools with the version specifier or source each was installed with (through
+uv), a Brewfile if you set one, and a known-broken list if you set one or the default file exists in
 your config folder. It reads the environment variables HOME, USERPROFILE, OS, XDG_CACHE_HOME and
 XDG_CONFIG_HOME to find those files. To tell whether Claude Code updates itself, it reads DISABLE_UPDATES,
 DISABLE_AUTOUPDATER and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC from the environment and from the env
 block of your Claude Code settings.json; nothing else in that file.
 
-What it passes on: the item names to the update commands; your marketplace names to claude plugin
+What it passes on: the item names to the update commands (a uv tool's name to uv tool upgrade); your marketplace names to claude plugin
 marketplace update; the GitHub repositories, folders and refs named in your plugin and skill metadata to gh
 api, which asks GitHub for them; and the Brewfile path, the known-broken path and your extra check command
 to the checker.
@@ -52,6 +56,11 @@ Uptick itself sends nothing anywhere and has no telemetry. The programs it start
 the npm registry for the latest Claude Code version, the GitHub API through gh for skill folders and
 plugin manifests, your marketplaces and Homebrew when you check now, and whatever an update you confirm
 downloads.
+
+uv tools are off by default. Add uv to the kinds setting (in /config, UPTICK_KINDS for the daily check, or
+--kinds) to turn them on; uv tool list --outdated then sends the name of every uv tool to PyPI (or the
+package index you set for uv) on every check, also of one installed from git, a URL or a folder, which is
+shown as not compared.
 
 ## What its hooks do
 

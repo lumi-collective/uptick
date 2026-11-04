@@ -30,8 +30,8 @@ const TITLE = 'Uptick'
 const COMMAND = 'uptick'
 const TEN_MINUTES = 600_000
 const FIFTEEN_MINUTES = 900_000
-const SCOPE: Record<string, string> = { plugin: 'plugins', skill: 'skills', brew: 'Homebrew' }
-const GROUP: Record<string, string> = { plugin: 'Plugins', skill: 'Skills', brew: 'Homebrew' }
+const SCOPE: Record<string, string> = { plugin: 'plugins', skill: 'skills', brew: 'Homebrew', uv: 'uv tools' }
+const GROUP: Record<string, string> = { plugin: 'Plugins', skill: 'Skills', brew: 'Homebrew', uv: 'uv tools' }
 const DAY = 86_400_000
 
 const resultA = atom({ plugin: 'uptick', key: 'result' } as const, null)
@@ -184,9 +184,9 @@ async function openPane($: Engine) {
     await update($, viewA, () => ({ name: 'list' }))
   }
   const result = await read($, resultA)
-  // 11 rows besides the items: the heading, the ✓ line, five group headers, the action row and its margin,
+  // 12 rows besides the items: the heading, the ✓ line, six group headers, the action row and its margin,
   // and two for a Known issue's detail line or a wrapped problem.
-  const rows = Math.min(24, 11 + (result ? result.items.length + result.problems.length + result.skipped.length : 2))
+  const rows = Math.min(24, 12 + (result ? result.items.length + result.problems.length + result.skipped.length : 2))
   const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true, rows, columns: 64 })
   // Not placed (no surface that places panes): the pane's tree draws in the band instead.
   await update($, whereA, () => (opened.isPlaced ? 'pane' : 'band'))
@@ -234,8 +234,10 @@ async function startRun($: Engine, keys: readonly string[]) {
       const cwd = await homeCwd($)
       const ran = await $.process.run(onHost(step.argv, onWindows), { timeoutMs: TEN_MINUTES, stdin: '', ...(env ? { env } : {}), ...cwd })
       const log = cleanLines(`${ran.stdout}\n${ran.stderr}`.trim(), 20_000)
-      // The skills CLI exits 0 when no installed skill has the name: nothing was updated.
-      const missed = step.kind === 'skill' ? /No installed skills found matching.*/.exec(log)?.[0] : undefined
+      // The skills CLI exits 0 when no installed skill has the name, and uv when an exact pin holds the tool
+      // (uv's bare "Nothing to upgrade" means current already): nothing was updated.
+      const missed =
+        step.kind === 'skill' ? /No installed skills found matching.*/.exec(log)?.[0] : step.kind === 'uv' ? /hint: .* is pinned .*/.exec(log)?.[0] : undefined
       await patchStep(
         $,
         index,
@@ -441,7 +443,7 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
 
   const groupHead = (title: string, n: number) => <Text dimColor>{`${title} (${n})`}</Text>
 
-  // Plugins, Skills, Homebrew, Known issues, Info; the hotkeys run on across groups.
+  // Plugins, Skills, Homebrew, uv tools, Known issues, Info; the hotkeys run on across groups.
   const groups = () => [
     ...kinds.flatMap(kind => {
       const group = sorted.updatable.filter(i => i.kind === kind)
@@ -776,7 +778,7 @@ async function onSessionStart($: Engine, e: Args<'session.start'>, next: Next<'s
   )
   await $.command.register({
     name: COMMAND,
-    description: `${TITLE}: show updates for Claude Code, plugins, skills and Homebrew; run one after you confirm it`,
+    description: `${TITLE}: show updates for Claude Code, plugins, skills, Homebrew and uv tools; run one after you confirm it`,
   })
   if (config.isInteractive) {
     try {

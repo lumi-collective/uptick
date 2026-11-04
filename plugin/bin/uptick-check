@@ -19,7 +19,7 @@ if [ -f "$conf" ]; then
   . "$conf"
   set +a
 fi
-# A scheduler starts this with a bare PATH: add where claude, brew and npm usually live.
+# A scheduler starts this with a bare PATH: add where claude, brew, npm and uv usually live.
 export PATH="${UPTICK_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin}:$PATH"
 
 fetch=1
