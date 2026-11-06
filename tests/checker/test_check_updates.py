@@ -923,6 +923,14 @@ class VulnScan(unittest.TestCase):
         self.assertEqual(self.cache()['repos'][self.repo]['gaps'],
                          [f'{1 + colon} lockfiles left out (a link, or a colon in the path)'])
 
+    def test_a_list_saved_with_a_byte_order_mark_is_read(self):
+        # Windows PowerShell 5.1 writes one with Set-Content -Encoding utf8
+        with open(os.path.join(self.home, 'xdg-config', 'uptick', 'scan-repos.json'), 'w', encoding='utf-8-sig') as f:
+            json.dump({'repos': [self.repo]}, f)
+        scan = self.scan()
+        self.assertEqual(scan['problems'], [])
+        self.assertEqual(list(self.cache()['repos']), [self.repo])
+
     def test_a_half_saved_list_keeps_the_repositories_results(self):
         self.scan()
         with open(os.path.join(self.home, 'xdg-config', 'uptick', 'scan-repos.json'), 'w') as f:

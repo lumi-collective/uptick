@@ -711,7 +711,7 @@ def load_repo_list():
     """The repositories opted in to scanning (scan-repos.json, {"repos": ["/abs/path", ...]}), and problems."""
     path = config_path('scan-repos.json')
     try:
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding='utf-8-sig') as f:  # also a hand-saved file that starts with a BOM
             listed = json.load(f).get('repos')
     except FileNotFoundError:
         return [], []
