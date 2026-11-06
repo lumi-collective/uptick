@@ -919,7 +919,7 @@ class VulnScan(unittest.TestCase):
         os.symlink(outside, os.path.join(self.repo, 'linked', 'Cargo.lock'))
         self.scan()
         locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
-        self.assertFalse([p for p in locks if ':' in p or 'linked' in p], locks)
+        self.assertFalse([p for p in locks if ':' in os.path.splitdrive(p)[1] or 'linked' in p], locks)
         self.assertEqual(self.cache()['repos'][self.repo]['gaps'],
                          [f'{1 + colon} lockfiles left out (a link, or a colon in the path)'])
 
