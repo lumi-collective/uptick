@@ -269,7 +269,8 @@ vulnerability scan on, an update whose installed version is vulnerable carries
 fields may be added; existing ones keep their names.
 
 `vulns.json` holds `targets` (`brew`, `npm-global`, `appium`, `claude-plugins`) and `repos` (keyed by the
-path in `scan-repos.json`). Each entry has `at` and `tried` (Unix seconds of the last good scan and of the
+real path of each entry in `scan-repos.json`, links resolved; a path that is not a folder gets an entry
+with an `error`). `details` come worst `level` first, then by name. Each entry has `at` and `tried` (Unix seconds of the last good scan and of the
 last try), `count`, `max`, `level`, `gaps`, `error`, `hint`, `prev` (the count and max of the scan before)
 and `details`: one per vulnerable package, with `name`, `version`, `ecosystem`, `ids`, `advisories` (how
 many issues, an alias counted once), `severity`, `level`, `fixed` (the lowest version that fixes them all,

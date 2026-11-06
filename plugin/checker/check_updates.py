@@ -719,7 +719,8 @@ def load_repo_list():
         listed = None
     if not isinstance(listed, list):  # None, not []: a half-saved list must not wipe the repositories' results
         return None, [{'text': 'scan-repos.json not readable: no repository scanned', 'hint': f'fix {path}'}]
-    repos = [p for p in listed if isinstance(p, str) and os.path.isabs(p) and '\0' not in p]
+    # The key is the real path, so the inbox and this list name a folder alike (no trailing slash, no link).
+    repos = [os.path.realpath(p) for p in listed if isinstance(p, str) and os.path.isabs(p) and '\0' not in p]
     bad = len(listed) - len(repos)
     return sorted(set(repos)), [{'text': f'scan-repos.json: ignored {bad} entries that are not absolute paths',
                                  'hint': f'fix {path}'}] if bad else []
@@ -744,6 +745,8 @@ def clean_entry(e):
                 'sources': texts(d, 'sources'), 'advisories': int(num(d, 'advisories')) or len(texts(d, 'ids')) or 1}
                for d in e.get('details') or [] if isinstance(d, dict) and isinstance(d.get('name'), str)] \
         if isinstance(e.get('details'), list) else []
+    # The worst first, then by name: a reader shows the top one without sorting.
+    details.sort(key=lambda d: (-LEVELS.index(d['level']), d['name'], d['version'], d['ecosystem']))
     prev, versions = e.get('prev'), e.get('versions')
     out = {'at': num(e, 'at'), 'tried': num(e, 'tried'), 'count': int(num(e, 'count')), 'max': text(e, 'max'),
            **({'versions': {k: v for k, v in versions.items() if isinstance(v, str)}} if isinstance(versions, dict) else {}),

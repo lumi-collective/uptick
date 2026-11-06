@@ -783,7 +783,7 @@ class VulnScan(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.home = home = self.tmp.name
+        self.home = home = os.path.realpath(self.tmp.name)  # macOS: /var is a link to /private/var
         self.repo = os.path.join(home, 'projects', 'web')
         for path in ('.appium/package-lock.json', 'plugins/lint/package-lock.json', 'plugins/lint/node_modules/x/package-lock.json',
                      'projects/web/package-lock.json', 'projects/web/tools/uv.lock', 'projects/web/node_modules/y/yarn.lock',
@@ -851,6 +851,19 @@ class VulnScan(unittest.TestCase):
         locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
         self.assertTrue(locks and all(os.path.isabs(p) for p in locks), locks)
         self.assertFalse([p for p in locks if 'node_modules' in p])
+
+    def test_a_repository_is_keyed_by_its_real_path(self):
+        link = os.path.join(self.home, 'web-link')
+        os.symlink(self.repo, link)
+        self.list_repos([link + '/', os.path.join(self.home, 'gone')])
+        self.scan()
+        repos = self.cache()['repos']
+        self.assertEqual(sorted(repos), [os.path.join(self.home, 'gone'), self.repo])
+        self.assertEqual(repos[os.path.join(self.home, 'gone')]['error'], 'not a folder')  # listed, never silently left out
+
+    def test_details_come_worst_first_then_by_name(self):
+        entry = cu.clean_entry({'at': 1, **cu.parse_brew(BREW_VULNS)})
+        self.assertEqual([(d['level'], d['name']) for d in entry['details']], [('high', 'tar'), ('medium', 'git')])
 
     def test_a_scan_runs_once_a_day(self):
         self.scan()
