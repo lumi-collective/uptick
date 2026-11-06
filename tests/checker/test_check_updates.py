@@ -758,7 +758,7 @@ class VulnParsing(unittest.TestCase):
         self.assertEqual((entry['count'], entry['max'], entry['level']), (2, '7.5', 'high'))
         pad, tiny = entry['details']
         self.assertEqual((pad['name'], pad['fixed'], pad['level'], pad['ids']), ('left-pad', '1.1.0', 'high', ['GHSA-aaaa-0001', 'GHSA-aaaa-0002']))
-        self.assertEqual(pad['sources'], ['api/package-lock.json', 'web/package-lock.json'])
+        self.assertEqual(pad['sources'], [os.path.join('api', 'package-lock.json'), os.path.join('web', 'package-lock.json')])
         self.assertEqual((tiny['fixed'], tiny['level']), ('', 'unknown'))
 
     def test_osv_output_of_another_shape_is_no_finding(self):
@@ -832,7 +832,8 @@ class VulnScan(unittest.TestCase):
 
     def cache(self):
         path = os.path.join(self.home, 'xdg-cache', 'uptick', 'vulns.json')
-        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        if os.name != 'nt':  # Windows has no POSIX mode bits
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         with open(path) as f:
             return json.load(f)
 
@@ -846,7 +847,7 @@ class VulnScan(unittest.TestCase):
         self.assertEqual(plugins['details'][0]['sources'], ['lint-helper@community'])
         self.assertEqual(plugins['gaps'], ['1 of 2 plugin installs without a lockfile'])
         repo = cache['repos'][self.repo]
-        self.assertEqual(repo['details'][0]['sources'], ['package-lock.json', 'tools/uv.lock'])
+        self.assertEqual(repo['details'][0]['sources'], ['package-lock.json', os.path.join('tools', 'uv.lock')])
         self.assertEqual((repo['count'], repo['level'], repo['details'][0]['fixed']), (1, 'high', '1.1.0'))
         locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
         self.assertTrue(locks and all(os.path.isabs(p) for p in locks), locks)
@@ -908,8 +909,10 @@ class VulnScan(unittest.TestCase):
         self.assertEqual(self.cache()['targets']['npm-global']['count'], 1)
 
     def test_a_link_or_a_colon_in_the_path_is_left_out_and_said_so(self):
-        os.makedirs(os.path.join(self.repo, 'a:b'))
-        open(os.path.join(self.repo, 'a:b', 'yarn.lock'), 'w').close()
+        colon = os.name != 'nt'  # Windows allows no colon in a name; test_a_windows_drive_… covers it there
+        if colon:
+            os.makedirs(os.path.join(self.repo, 'a:b'))
+            open(os.path.join(self.repo, 'a:b', 'yarn.lock'), 'w').close()
         outside = os.path.join(self.home, 'outside.lock')
         open(outside, 'w').close()
         os.makedirs(os.path.join(self.repo, 'linked'))
@@ -917,7 +920,8 @@ class VulnScan(unittest.TestCase):
         self.scan()
         locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
         self.assertFalse([p for p in locks if ':' in p or 'linked' in p], locks)
-        self.assertEqual(self.cache()['repos'][self.repo]['gaps'], ['2 lockfiles left out (a link, or a colon in the path)'])
+        self.assertEqual(self.cache()['repos'][self.repo]['gaps'],
+                         [f'{1 + colon} lockfiles left out (a link, or a colon in the path)'])
 
     def test_a_half_saved_list_keeps_the_repositories_results(self):
         self.scan()
