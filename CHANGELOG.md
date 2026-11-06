@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A vulnerability scan, off by default, on when `vulns` is in `kinds`: once a day per target, `brew vulns`
+  and `osv-scanner` (api.osv.dev) scan Homebrew, global npm, Appium and the plugins' lockfiles. An update row
+  whose installed version is vulnerable shows a count and a level (`"vulns"` in the JSON); a finding without
+  an update is only counted. The details stay in `~/.cache/uptick/vulns.json`, which also holds the scans of
+  the repositories listed in `~/.config/uptick/scan-repos.json`, for other tools. `--vulns-now` rescans.
 - A new kind, `uv`: tools installed with `uv tool install`, from `uv tool list --outdated` (uv 0.10.10+, asks
   PyPI), updated with `uv tool upgrade <name>`; off by default, on when `uv` is in `kinds`. A tool installed
   from git, a folder, or an exact pin shows under Info as `not compared`; one with a range, or pinned through

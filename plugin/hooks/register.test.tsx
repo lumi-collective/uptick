@@ -1044,3 +1044,46 @@ test('the Done view keeps full names after the check that follows the run', asyn
   expect((await ui.find({ type: 'Text', text: /lint-helper/ }))?.text).toMatch(/✓ lint-helper@community {2}1\.4\.0 → 1\.5\.0$/)
   await ui.unmount()
 })
+
+// The opt-in scan marks the row an update fixes: a count and a level, never an id or a package name.
+const VULNS = {
+  ...RESULT,
+  items: [
+    { ...RESULT.items[0], vulns: { count: 3, level: 'high' } },
+    RESULT.items[1],
+    { ...RESULT.items[2], vulns: { count: 1, level: 'unknown' } },
+  ],
+  problems: [],
+}
+
+test('a row with known vulnerabilities says how many and how bad, in one and two lines and in the report', async ($, on) => {
+  world(on, { cache: VULNS, checker: JSON.stringify(VULNS) })
+  await start($)
+  const wide = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  expect((await wide.find({ key: 'item:plugin:lint-helper@community' }))?.text).toMatch(/^lint-helper@community +1\.4\.0 → 1\.5\.0 +3 vulns \(high\)$/)
+  expect((await wide.find({ key: 'item:brew:gh' }))?.text).toMatch(/^gh +2\.81\.0 → 2\.82\.1 +1 vuln$/)
+  expect((await wide.find({ key: 'item:skill:code-review' }))?.text).not.toContain('vuln')
+  await wide.unmount()
+  const narrow = await $.ui.mount({ ...pane(50), surface: 'terminal' })
+  expect((await narrow.find({ type: 'Text', text: /1\.4\.0 → 1\.5\.0/ }))?.text).toBe('     1.4.0 → 1.5.0  3 vulns (high)')
+  await narrow.unmount()
+  expect(report(parseResult(JSON.stringify(VULNS)), parseKinds('plugin,skill,brew'), false, NOW)).toContain(
+    '  ↑ lint-helper@community 1.4.0 → 1.5.0  ! 3 vulns (high)\n      claude plugin update lint-helper@community',
+  )
+})
+
+test('parseResult keeps vulns only in the checker shape', () => {
+  const item = (vulns: unknown) => parseResult(JSON.stringify({ items: [{ id: 'gh', kind: 'brew', vulns }] }))?.items[0]?.vulns
+  expect(item({ count: 2, level: 'critical' })).toEqual({ count: 2, level: 'critical' })
+  for (const bad of [{ count: 0, level: 'high' }, { count: 1.5, level: 'high' }, { count: '2', level: 'high' }, { count: 2, level: '\u001b[31m' }, 'x', null])
+    expect(item(bad)).toBeUndefined()
+})
+
+test('vulns in kinds reaches the checker and adds no group', { options: { kinds: 'plugin,skill,brew,vulns' } }, async ($, on) => {
+  const { clock, w } = world(on)
+  await start($)
+  await runCommand($)
+  await clock.settle()
+  expect(w.ran[0]?.at(-1)).toBe('--kinds=plugin,skill,brew,vulns')
+  expect(parseKinds('plugin,skill,brew,vulns')).toEqual(['plugin', 'skill', 'brew'])
+})

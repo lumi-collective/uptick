@@ -33,7 +33,8 @@ UPTICK_KINDS=plugin,skill,brew
 ```
 
 Add `uv` to `UPTICK_KINDS` to check uv tools too; the name of every uv tool then goes to PyPI (or your uv
-index) on every check.
+index) on every check. Add `vulns` to turn on the vulnerability scan; package names and versions then go to
+api.osv.dev once a day per target (see the main README).
 
 A scheduler starts it with a bare PATH; it adds `~/.local/bin` and the usual Homebrew folders. If your
 `claude`, `npm`, `brew` or `uv` live elsewhere, set `UPTICK_PATH` in the same file.

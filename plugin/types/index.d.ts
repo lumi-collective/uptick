@@ -9,6 +9,8 @@ export type ToolItem = {
   note?: string
   detail?: string
   cask?: boolean
+  /** Known vulnerabilities of what this update replaces (opt-in scan): a count and the worst level. */
+  vulns?: { count: number; level: string }
 }
 
 export type Problem = { text: string; hint?: string; offline?: boolean }

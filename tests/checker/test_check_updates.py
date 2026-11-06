@@ -479,7 +479,7 @@ class Kinds(unittest.TestCase):
         problems = json.loads(out.getvalue())['problems']
         self.assertEqual(len(problems), 1)
         # The exact text also proves the empty entry between the two commas is not reported.
-        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew, uv)')
+        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew, uv, vulns)')
         self.assertEqual(problems[0]['hint'], 'fix kinds in /config, UPTICK_KINDS or --kinds')
         self.assertEqual(code, 2)
 
@@ -719,6 +719,318 @@ class Cache(unittest.TestCase):
                 self.assertEqual(json.load(f)['checkedAt'], '2026-01-01T09:00:00+00:00')
             self.assertEqual(os.listdir(tmp), ['last.json'])  # no temp file left behind
             self.assertIn('cache not written', out.getvalue())
+
+
+def osv_package(name, version, *vulns):
+    """An osv-scanner package entry; each vuln is (id, CVSS score, [(ecosystem, fixed), ...])."""
+    return {'package': {'name': name, 'version': version, 'ecosystem': 'npm'},
+            'vulnerabilities': [{'id': i, 'affected': [{'package': {'name': name, 'ecosystem': eco}, 'ranges': [
+                {'type': 'SEMVER', 'events': [{'introduced': '0'}, {'fixed': f}]}]} for eco, f in fixes]}
+                for i, _, fixes in vulns],
+            'groups': [{'ids': [i], 'max_severity': s} for i, s, _ in vulns]}
+
+
+# Synthetic data only. left-pad 1.0.0 has two advisories: one fixed in 0.9.0 (below it, so not a fix) and
+# 1.0.2, one in 1.1.0; a PyPI package of the same name does not count. tinyhttp is fixed only by a commit.
+LEFT_PAD = osv_package('left-pad', '1.0.0', ('GHSA-aaaa-0001', '7.5', [('npm', '0.9.0'), ('npm', '1.0.2'), ('PyPI', '9.0')]),
+                       ('GHSA-aaaa-0002', '5.0', [('npm', '1.1.0')]))
+TINYHTTP = osv_package('tinyhttp', '0.9.0', ('GHSA-aaaa-0003', '', [('npm', 'abc1234')]))
+BREW_VULNS = {'checked': 9, 'complete': False, 'skipped_formulae': ['a'], 'unscanned_formulae': {}, 'outdated_without_sbom': [],
+              'findings': [
+                  {'formula': 'curl', 'version': '8', 'patched': [{'id': 'X'}], 'vulnerabilities': []},  # all patched
+                  {'formula': 'git', 'version': '2', 'vulnerabilities': [{'id': 'CVE-2000-0001', 'severity': 'MEDIUM'}]},
+                  {'formula': 'tar', 'version': '1', 'vulnerabilities': [{'id': 'CVE-2000-0002', 'severity': 'HIGH'},
+                                                                         {'id': 'CVE-2000-0003', 'severity': 'UNKNOWN'}]}]}
+NEEDLES = ('GHSA', 'CVE-', 'left-pad', 'tinyhttp', 'tar')
+
+
+class VulnParsing(unittest.TestCase):
+    def test_levels(self):
+        for given, level in (('9.8', 'critical'), ('7.0', 'high'), ('6.9', 'medium'), ('0.1', 'low'), ('0', 'unknown'),
+                             ('', 'unknown'), ('MODERATE', 'medium'), ('HIGH', 'high'), ('nan', 'unknown'), (None, 'unknown')):
+            self.assertEqual(cu.level_of(given), level, given)
+
+    def test_osv_one_detail_per_package_with_its_fix_and_lockfiles(self):
+        data = {'results': [{'source': {'path': '/r/web/package-lock.json'}, 'packages': [
+            LEFT_PAD, TINYHTTP, {'package': {'name': 'ok', 'version': '1', 'ecosystem': 'npm'}, 'vulnerabilities': []}]},
+            {'source': {'path': '/r/api/package-lock.json'}, 'packages': [LEFT_PAD]}]}
+        entry = cu.parse_osv(data, lambda p: os.path.relpath(p, '/r'))
+        self.assertEqual((entry['count'], entry['max'], entry['level']), (2, '7.5', 'high'))
+        pad, tiny = entry['details']
+        self.assertEqual((pad['name'], pad['fixed'], pad['level'], pad['ids']), ('left-pad', '1.1.0', 'high', ['GHSA-aaaa-0001', 'GHSA-aaaa-0002']))
+        self.assertEqual(pad['sources'], ['api/package-lock.json', 'web/package-lock.json'])
+        self.assertEqual((tiny['fixed'], tiny['level']), ('', 'unknown'))
+
+    def test_osv_output_of_another_shape_is_no_finding(self):
+        for data in ({}, {'results': 'x'}, {'results': [7, {'packages': [None, {'package': 'x', 'vulnerabilities': [1]}]}]}):
+            self.assertEqual(cu.parse_osv(data)['count'], 0)
+
+    def test_brew(self):
+        entry = cu.parse_brew(BREW_VULNS)
+        self.assertEqual([d['name'] for d in entry['details']], ['git', 'tar'])
+        self.assertEqual((entry['count'], entry['level'], entry['details'][1]['ids']), (2, 'high', ['CVE-2000-0002', 'CVE-2000-0003']))
+        self.assertEqual(entry['gaps'], ['1 formulae not checked by brew vulns', 'casks not covered'])
+
+    def test_brew_findings_of_the_current_formula_only_are_left_out(self):
+        # brew scans an outdated formula without an SBOM at its current tag: nothing about what is installed.
+        entry = cu.parse_brew({**BREW_VULNS, 'outdated_without_sbom': ['tar']})
+        self.assertEqual([d['name'] for d in entry['details']], ['git'])
+        self.assertEqual(entry['gaps'][0], '2 formulae not checked by brew vulns')
+
+
+class VulnScan(unittest.TestCase):
+    """scan_vulns end to end in a synthetic home; every tool call is faked, nothing goes out."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = home = self.tmp.name
+        self.repo = os.path.join(home, 'projects', 'web')
+        for path in ('.appium/package-lock.json', 'plugins/lint/package-lock.json', 'plugins/lint/node_modules/x/package-lock.json',
+                     'projects/web/package-lock.json', 'projects/web/tools/uv.lock', 'projects/web/node_modules/y/yarn.lock',
+                     'plugins/bare/README.md'):
+            os.makedirs(os.path.dirname(os.path.join(home, path)), exist_ok=True)
+            open(os.path.join(home, path), 'w').close()
+        self.write('.claude/plugins/installed_plugins.json', {'plugins': {
+            'lint-helper@community': [{'installPath': os.path.join(home, 'plugins', 'lint')}],
+            'bare@community': [{'installPath': os.path.join(home, 'plugins', 'bare')}]}})
+        self.list_repos([self.repo, 'relative/path'])
+        self.calls, self.osv_exit = [], 1
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, rel, data):
+        path = os.path.join(self.home, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(data, f)
+
+    def list_repos(self, repos):
+        self.write('xdg-config/uptick/scan-repos.json', {'repos': repos})
+
+    def fake_run(self, cmd, **kw):
+        name, args = os.path.basename(cmd[0]), cmd[1:]
+        self.calls.append([name, *args])
+        if name == 'brew' and args == ['vulns', '--json']:
+            return subprocess.CompletedProcess(cmd, 1, json.dumps(BREW_VULNS), '')
+        if name == 'npm' and args[:2] == ['ls', '-g']:
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({'dependencies': {'left-pad': {'version': '1.0.0'}}}), '')
+        if name == 'osv-scanner':
+            with open(args[args.index('--config') + 1]) as f:
+                self.assertEqual(f.read(), '')  # the scanned folder's own config can hide nothing
+            paths = [args[i + 1] for i, a in enumerate(args) if a == '-L']
+            out = {'results': [{'source': {'path': p}, 'packages': [LEFT_PAD]} for p in paths]}
+            return subprocess.CompletedProcess(cmd, self.osv_exit, json.dumps(out) if self.osv_exit == 1 else '', 'error')
+        raise AssertionError(f'unexpected command {cmd}')
+
+    def scan(self, which=lambda t: '/bin/' + t, now=1_800_000_000, force=False):
+        env = {'XDG_CACHE_HOME': os.path.join(self.home, 'xdg-cache'), 'XDG_CONFIG_HOME': os.path.join(self.home, 'xdg-config')}
+        with mock.patch.dict(os.environ, env), mock.patch.object(cu, 'HOME', self.home), \
+                mock.patch.object(cu.shutil, 'which', which), mock.patch.object(cu.subprocess, 'run', self.fake_run), \
+                mock.patch.object(cu.time, 'time', lambda: now):
+            return cu.scan_vulns(force)
+
+    def cache(self):
+        path = os.path.join(self.home, 'xdg-cache', 'uptick', 'vulns.json')
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with open(path) as f:
+            return json.load(f)
+
+    def test_scans_the_machine_and_the_listed_repositories_into_the_cache(self):
+        scan = self.scan()
+        cache = self.cache()
+        self.assertEqual(sorted(cache['targets']), ['appium', 'brew', 'claude-plugins', 'npm-global'])
+        self.assertEqual(list(cache['repos']), [self.repo])  # the relative entry is ignored, and said so
+        self.assertEqual([p['text'] for p in scan['problems']], ['scan-repos.json: ignored 1 entries that are not absolute paths'])
+        plugins = cache['targets']['claude-plugins']
+        self.assertEqual(plugins['details'][0]['sources'], ['lint-helper@community'])
+        self.assertEqual(plugins['gaps'], ['1 of 2 plugin installs without a lockfile'])
+        repo = cache['repos'][self.repo]
+        self.assertEqual(repo['details'][0]['sources'], ['package-lock.json', 'tools/uv.lock'])
+        self.assertEqual((repo['count'], repo['level'], repo['details'][0]['fixed']), (1, 'high', '1.1.0'))
+        locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
+        self.assertTrue(locks and all(os.path.isabs(p) for p in locks), locks)
+        self.assertFalse([p for p in locks if 'node_modules' in p])
+
+    def test_a_scan_runs_once_a_day(self):
+        self.scan()
+        self.calls.clear()
+        self.scan(now=1_800_000_000 + cu.DAY - 1)
+        self.assertEqual(self.calls, [])
+        self.scan(now=1_800_000_000 + cu.DAY)
+        self.assertTrue(self.calls)
+
+    def test_a_failed_scan_keeps_the_last_result_and_waits_an_hour(self):
+        self.scan()
+        self.osv_exit = 2
+        self.scan(now=1_800_000_000 + cu.DAY)
+        repo = self.cache()['repos'][self.repo]
+        self.assertEqual((repo['count'], repo['at'], repo['tried']), (1, 1_800_000_000, 1_800_000_000 + cu.DAY))
+        self.assertIn('failed (exit 2)', repo['error'])
+        self.calls.clear()
+        self.scan(now=1_800_000_000 + cu.DAY + cu.RETRY_AFTER - 1)
+        self.assertEqual(self.calls, [])
+
+    def test_a_repository_taken_off_the_list_leaves_the_cache(self):
+        self.scan()
+        self.list_repos([])
+        self.scan(now=1_800_000_000 + 60)
+        self.assertEqual(self.cache()['repos'], {})
+
+    def test_without_osv_scanner_only_brew_runs(self):
+        scan = self.scan(which=lambda t: None if t == 'osv-scanner' else '/bin/' + t)
+        self.assertEqual({c[0] for c in self.calls}, {'brew'})
+        self.assertIn('npm-global not scanned for vulnerabilities: osv-scanner not found (brew install osv-scanner)', scan['skipped'])
+        self.assertEqual(self.cache()['repos'][self.repo]['error'], 'osv-scanner not found')
+
+    def test_global_npm_with_a_broken_dependency_is_still_scanned(self):
+        tree = json.dumps({'dependencies': {'left-pad': {'version': '1.0.0'}}, 'problems': ['invalid: peer']})
+        real = self.fake_run
+
+        def npm_exits_1(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, tree, '') if cmd[1:3] == ['ls', '-g'] else real(cmd, **kw)
+        self.fake_run = npm_exits_1
+        self.scan()
+        self.assertEqual(self.cache()['targets']['npm-global']['error'], '')
+        self.assertEqual(self.cache()['targets']['npm-global']['count'], 1)
+
+    def test_a_link_or_a_colon_in_the_path_is_left_out_and_said_so(self):
+        os.makedirs(os.path.join(self.repo, 'a:b'))
+        open(os.path.join(self.repo, 'a:b', 'yarn.lock'), 'w').close()
+        outside = os.path.join(self.home, 'outside.lock')
+        open(outside, 'w').close()
+        os.makedirs(os.path.join(self.repo, 'linked'))
+        os.symlink(outside, os.path.join(self.repo, 'linked', 'Cargo.lock'))
+        self.scan()
+        locks = [c[i + 1] for c in self.calls if c[0] == 'osv-scanner' for i, a in enumerate(c) if a == '-L']
+        self.assertFalse([p for p in locks if ':' in p or 'linked' in p], locks)
+        self.assertEqual(self.cache()['repos'][self.repo]['gaps'], ['2 lockfiles left out (a link, or a colon in the path)'])
+
+    def test_a_half_saved_list_keeps_the_repositories_results(self):
+        self.scan()
+        with open(os.path.join(self.home, 'xdg-config', 'uptick', 'scan-repos.json'), 'w') as f:
+            f.write('{"repos": [')
+        self.calls.clear()
+        scan = self.scan(now=1_800_000_000 + cu.DAY)
+        self.assertEqual(list(self.cache()['repos']), [self.repo])
+        self.assertIn('scan-repos.json not readable: no repository scanned', [p['text'] for p in scan['problems']])
+        self.assertFalse([c for c in self.calls if any(self.repo in a for a in c)])  # and not rescanned
+
+    def test_a_time_in_the_future_is_scanned_again(self):
+        self.write('xdg-cache/uptick/vulns.json', {'targets': {'brew': {'at': 1_800_000_000 * 1000, 'tried': 1_800_000_000 * 1000,
+                                                                        'count': 0, 'max': '', 'details': [], 'gaps': []}}})
+        self.scan(which=lambda t: '/bin/brew' if t == 'brew' else None)
+        self.assertEqual(self.calls, [['brew', 'vulns', '--json']])
+
+    def test_a_check_with_nothing_due_leaves_the_file_byte_for_byte(self):
+        os.symlink(os.path.join(self.home, 'outside.lock'), os.path.join(self.home, 'plugins', 'lint', 'yarn.lock'))  # two gaps
+        path = os.path.join(self.home, 'xdg-cache', 'uptick', 'vulns.json')
+        for which in (lambda t: '/bin/' + t, lambda t: None if t == 'osv-scanner' else '/bin/' + t):
+            self.scan(which=which)
+            with open(path, 'rb') as f:
+                first = f.read()
+            for later in (60, 120):
+                self.scan(which=which, now=1_800_000_000 + later)
+                with open(path, 'rb') as f:
+                    self.assertEqual(f.read(), first)
+            self.write('xdg-cache/uptick/vulns.json', {})
+
+    def test_a_windows_drive_is_not_a_colon_in_the_path(self):
+        import ntpath
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(cu.os, 'walk', lambda r: iter([
+                ('C:\\Users\\a\\web', [], ['package-lock.json']), ('C:\\Users\\a\\web\\x:y', [], ['yarn.lock'])])), \
+                mock.patch.object(cu.os.path, 'splitdrive', ntpath.splitdrive), mock.patch.object(cu.os.path, 'join', ntpath.join):
+            self.assertEqual(cu.lockfiles_under(root), (['C:\\Users\\a\\web\\package-lock.json'], 1))
+
+    def test_a_folder_walk_has_a_cap(self):
+        with mock.patch.object(cu, 'MAX_FOLDERS', 1):  # the repository has two: itself and tools/
+            self.scan()
+        self.assertIn('folders: not scanned', self.cache()['repos'][self.repo]['error'])
+
+    def test_the_old_cache_shape_is_read(self):
+        self.write('xdg-cache/uptick/vulns.json', {'targets': {'brew': {'at': 1_800_000_000, 'count': 1, 'max': 'HIGH', 'details': [
+            {'name': 'git', 'version': '2', 'severity': 'HIGH', 'ids': ['CVE-2000-0001']}], 'gaps': []}, 'bogus': {'at': 1}}})
+        scan = self.scan(which=lambda t: '/bin/brew' if t == 'brew' else None)
+        self.assertEqual(self.calls, [])  # scanned today already
+        self.assertEqual(scan['cache']['targets']['brew']['details'][0]['level'], 'high')
+        self.assertNotIn('bogus', scan['cache']['targets'])
+
+
+class VulnRows(unittest.TestCase):
+    """The Uptick view: a count and a level on the row an update fixes; IDs and package names never."""
+
+    def scan(self, **targets):
+        return {'cache': {'schema': 1, 'targets': targets, 'repos': {'/r': {}}}, 'now': 1_800_000_000, 'problems': [], 'skipped': []}
+
+    def test_outdated_rows_get_a_count_and_a_level(self):
+        plugins = cu.parse_osv({'results': [{'source': {'path': '/p/package-lock.json'}, 'packages': [LEFT_PAD, TINYHTTP]}]},
+                               lambda p: 'lint-helper@community')
+        rep = cu.Report({})
+        rep.items = [{'id': 'git', 'kind': 'brew', 'have': '2_1'}, {'id': 'git', 'kind': 'brew', 'cask': True, 'have': '2'},
+                     {'id': 'jq', 'kind': 'brew', 'have': '1'}, {'id': 'tar', 'kind': 'brew', 'have': '1.1'},
+                     {'id': 'lint-helper@community', 'kind': 'plugin', 'have': '1.4.0'},
+                     {'id': 'other@community', 'kind': 'plugin', 'have': '1.0.0'}]
+        brew = {'at': 1_800_000_000, 'error': '', **cu.parse_brew(BREW_VULNS)}
+        plugins = {'at': 1_800_000_000, 'error': '', **plugins, 'versions': {'lint-helper@community': '1.4.0', 'other@community': '1.0.0'}}
+        cu.add_vulns(rep, self.scan(brew=brew, **{'claude-plugins': plugins}))
+        # git 2_1 is the scanned git 2 (brew vulns drops the revision); tar 1.1 is not the scanned tar 1.
+        self.assertEqual([i.get('vulns') for i in rep.items],
+                         [{'count': 1, 'level': 'medium'}, None, None, None, {'count': 3, 'level': 'high'}, None])
+        # tar has no update row: it is only counted in the checked list.
+        self.assertIn('security: brew: 2 vulnerable (max high) (1 formulae not checked by brew vulns; casks not covered)', rep.checked)
+        self.assertIn('security: 1 repositories (for the inbox)', rep.checked)
+        self.assertEqual(rep.problems, [])
+        shown = json.dumps([rep.checked, rep.problems, rep.skipped])
+        self.assertFalse([n for n in NEEDLES if n in shown], shown)
+
+    def test_old_findings_and_a_plugin_updated_since_mark_nothing(self):
+        plugins = cu.parse_osv({'results': [{'source': {'path': '/p/package-lock.json'}, 'packages': [LEFT_PAD]}]},
+                               lambda p: 'lint-helper@community')
+        for at, scanned in ((1_800_000_000 - 2 * cu.DAY, '1.5.0'), (1_800_000_000, '1.4.0')):
+            rep = cu.Report({})
+            rep.items = [{'id': 'lint-helper@community', 'kind': 'plugin', 'have': '1.5.0'}, {'id': 'git', 'kind': 'brew', 'have': '2'}]
+            cu.add_vulns(rep, self.scan(brew={'at': at, 'error': '', **cu.parse_brew(BREW_VULNS)},
+                                        **{'claude-plugins': {'at': at, 'error': '', **plugins, 'versions': {'lint-helper@community': scanned}}}))
+            self.assertEqual(rep.items[0].get('vulns'), None)
+        self.assertEqual(rep.items[1].get('vulns'), {'count': 1, 'level': 'medium'})  # fresh: the brew finding still counts
+
+    def test_aliases_in_one_group_count_once(self):
+        pkg = osv_package('requests', '2.0', ('GHSA-aaaa-0004', '7.0', [('npm', '2.1')]))
+        pkg['vulnerabilities'].append({'id': 'PYSEC-0001', 'affected': pkg['vulnerabilities'][0]['affected']})
+        pkg['groups'] = [{'ids': ['GHSA-aaaa-0004', 'PYSEC-0001'], 'max_severity': '7.0'}]
+        detail = cu.parse_osv({'results': [{'packages': [pkg]}]})['details'][0]
+        self.assertEqual((detail['ids'], detail['advisories']), (['GHSA-aaaa-0004', 'PYSEC-0001'], 1))
+
+    def test_a_malformed_vulns_from_an_extra_check_does_not_break_the_text(self):
+        result = {'checkedAt': '2026-01-01T09:00', 'problems': [], 'skipped': [],
+                  'items': [{'id': 'x', 'kind': 'info', 'have': '1', 'latest': '2', 'vulns': {}},
+                            {'id': 'y', 'kind': 'brew', 'have': '1', 'latest': '2', 'vulns': {'count': 1, 'level': '\x1b[31m'}}]}
+        self.assertNotIn('known vulnerabilities', cu.text(result))
+
+    def test_a_failed_scan_is_a_problem_row_without_ids(self):
+        rep = cu.Report({})
+        brew = {'at': 0, 'count': 0, 'level': '', 'gaps': [], 'details': [], 'error': 'brew vulns failed (exit 2); offline?', 'hint': ''}
+        cu.add_vulns(rep, self.scan(brew=brew))
+        self.assertEqual(rep.problems, [{'text': 'security: brew: scan failed: brew vulns failed (exit 2); offline?; never scanned',
+                                         'hint': 'tried again after an hour'}])
+
+    def test_the_text_output_flags_the_row(self):
+        result = {'checkedAt': '2026-01-01T09:00', 'items': [{'id': 'git', 'kind': 'brew', 'have': '2', 'latest': '3',
+                                                               'vulns': {'count': 2, 'level': 'high'}}], 'problems': [], 'skipped': []}
+        self.assertIn('↑ git: 2 → 3   [brew upgrade git]   ! 2 known vulnerabilities (max high)', cu.text(result))
+
+    def test_only_a_named_vulns_kind_scans(self):
+        empty = {'cache': {'targets': {}, 'repos': {}}, 'now': 0, 'problems': [], 'skipped': []}
+        quiet = dict(check_claude=lambda r: None, check_plugins=lambda r, f: None, check_skills=lambda r: None,
+                     check_brew=lambda r, f, b: None, check_uv=lambda r: None)
+        with mock.patch.multiple(cu, **quiet), mock.patch.object(cu, 'scan_vulns', return_value=empty) as scans, \
+                mock.patch('sys.stdout', new_callable=io.StringIO):
+            cu.check()
+            cu.main([])
+            cu.main(['--kinds=plugin,skill,brew,uv'])
+            scans.assert_not_called()
+            cu.main(['--kinds=brew,vulns', '--vulns-now'])
+            scans.assert_called_once_with(True)
 
 
 class InSync(unittest.TestCase):

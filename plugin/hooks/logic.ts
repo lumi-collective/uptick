@@ -53,6 +53,21 @@ export const clean = (v: unknown, max = 300): string =>
 export const cleanLines = (text: string, max: number): string =>
   text.replace(ESCAPES, '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, ' ').slice(-max)
 
+const LEVELS = ['unknown', 'low', 'medium', 'high', 'critical']
+
+/** A row's vulnerability count and level, only in the shape the checker writes. */
+function vulnsOf(v: unknown): Pick<ToolItem, 'vulns'> {
+  if (!isObject(v)) return {}
+  const { count, level } = v
+  return typeof count === 'number' && Number.isInteger(count) && count > 0 && typeof level === 'string' && LEVELS.includes(level)
+    ? { vulns: { count: Math.min(count, 9999), level } }
+    : {}
+}
+
+/** `2 vulns (high)`, or '' for a row with none known. */
+export const vulnsText = (item: Pick<ToolItem, 'vulns'>): string =>
+  item.vulns ? `${item.vulns.count} vuln${item.vulns.count === 1 ? '' : 's'}${item.vulns.level === 'unknown' ? '' : ` (${item.vulns.level})`}` : ''
+
 /** The checker's JSON, or null when the text is not that shape. Unknown fields are dropped. */
 export function parseResult(text: string): CheckResult | null {
   let data: unknown
@@ -75,6 +90,7 @@ export function parseResult(text: string): CheckResult | null {
       ...(i.note ? { note: clean(i.note) } : {}),
       ...(i.detail ? { detail: clean(i.detail, 600) } : {}),
       ...(i.cask === true ? { cask: true } : {}),
+      ...vulnsOf(i.vulns),
     })
   }
   const problems: Problem[] = []
@@ -216,7 +232,7 @@ export function report(result: CheckResult | null, kinds: readonly string[], isH
   const status = updatable.length ? `${updatable.length} available` : 'all current'
   const lines = [`Uptick: ${status} (checked ${when(result.checkedAt, nowMs)})`]
   if (!updatable.length && result.checked.length) lines.push(`  ✓ ${result.checked.join(' · ')}`)
-  for (const i of updatable) lines.push(`  ↑ ${i.name} ${versions(i)}`, `      ${(argvFor(i) ?? []).join(' ')}`)
+  for (const i of updatable) lines.push(`  ↑ ${i.name} ${versions(i)}${i.vulns ? `  ! ${vulnsText(i)}` : ''}`, `      ${(argvFor(i) ?? []).join(' ')}`)
   for (const i of info) lines.push(`  · ${i.name} ${versions(i)} (${i.note ?? 'updates itself; new sessions get it'})`)
   for (const i of broken) lines.push(`  ! ${i.name}: ${i.note ?? 'upstream known broken'}`)
   for (const p of problems) lines.push(`  ? ${p.text}${p.hint ? ` (${p.hint})` : ''}`)

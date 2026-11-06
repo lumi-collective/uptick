@@ -4,10 +4,12 @@
 Checks Claude Code (vs the npm registry's latest), installed Claude Code plugins (vs the version
 their marketplace advertises), skills-CLI skills (~/.agents/.skill-lock.json tree hash vs GitHub,
 through gh), Homebrew and uv tools (uv tool list --outdated, which asks the package index).
-A check whose tool or file is absent is skipped.
+A check whose tool or file is absent is skipped. With vulns in --kinds it also scans Homebrew, global npm,
+Appium and the plugins (brew vulns, osv-scanner; online, at most once a day each), and the repositories
+listed in ~/.config/uptick/scan-repos.json, into ~/.cache/uptick/vulns.json.
 
 Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
-                        [--known-broken PATH] [--extra COMMAND] [--kinds LIST]
+                        [--known-broken PATH] [--extra COMMAND] [--kinds LIST] [--vulns-now]
   --json               print the result as JSON (schema: README.md) instead of text
   --fetch              refresh marketplace and Homebrew metadata first (slow)
   --cache [PATH]       also write the JSON to PATH (default: ~/.cache/uptick/last.json)
@@ -16,7 +18,8 @@ Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
                        that upstream version is a note, not an update; `kind` (optional) narrows the entry
                        (default: ~/.config/uptick/known-broken.json, when it exists)
   --extra COMMAND      run COMMAND (split like a shell, run without one) and merge the JSON it prints
-  --kinds LIST         comma list of plugin, skill, brew, uv: check only these (default: plugin, skill, brew)
+  --kinds LIST         comma list of plugin, skill, brew, uv, vulns: check only these (default: plugin, skill, brew)
+  --vulns-now          with vulns: rescan every target now, whatever the age of its last scan
 Exit code: 0 = all current, 1 = updates available, 2 = only problems. Known-broken notes,
 `not compared` items and self-updating tools are not updates.
 """
@@ -31,11 +34,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import quote
 
 HOME = os.path.expanduser('~')
-KINDS = ('plugin', 'skill', 'brew', 'uv')
+KINDS = ('plugin', 'skill', 'brew', 'uv', 'vulns')
 # uv is opt-in: its check sends the name of every uv tool to the package index.
 DEFAULT_KINDS = ('plugin', 'skill', 'brew')
 # The skills CLI the mod runs, pinned (hooks/logic.ts SKILLS_CLI).
@@ -437,6 +441,425 @@ def check_uv(rep):
     rep.checked.append('uv tools')
 
 
+# ---- vulnerability scans: opt-in, `vulns` in kinds ----
+# brew vulns and osv-scanner send package names and versions to api.osv.dev. Each target is scanned at most
+# once a day; the result, IDs and package names included, stays in the local cache (vulns.json), which the
+# inbox app also reads. A row gets only a count and a level.
+SCAN_SECONDS = 120
+DAY = 86400
+RETRY_AFTER = 3600  # a failed scan is not retried on every check
+LOCKFILES = ('package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'uv.lock', 'poetry.lock', 'Cargo.lock')
+LEVELS = ('unknown', 'low', 'medium', 'high', 'critical')
+MAX_FOLDERS = 20000  # a listed home folder must not take the whole check's time
+INSTALL_HINT = 'brew install osv-scanner'
+
+
+class ScanError(Exception):
+    """A scan that gave no result; its text goes into the cache and a problem row, so it holds no outside text."""
+
+
+def level_of(severity):
+    """A CVSS score ("7.5") or a label ("MODERATE") as one of LEVELS."""
+    try:
+        score = float(severity)
+    except (TypeError, ValueError):
+        label = str(severity).lower()
+        label = 'medium' if label == 'moderate' else label
+        return label if label in LEVELS else 'unknown'
+    return 'critical' if score >= 9 else 'high' if score >= 7 else 'medium' if score >= 4 else 'low' if score > 0 else 'unknown'
+
+
+def top_level(levels):
+    """The worst of some levels, '' for none."""
+    return max(levels, key=LEVELS.index, default='')
+
+
+def fixed_version(pkg, vulns):
+    """The lowest version above the installed one that fixes every vulnerability of a package, '' when one has
+    no such version (a commit fix, last_affected only, or a version that does not parse)."""
+    need = None
+    for v in vulns:
+        found = [e['fixed'] for a in (v.get('affected') if isinstance(v, dict) else None) or [] if isinstance(a, dict)
+                 and isinstance(a.get('package'), dict) and a['package'].get('name') == pkg.get('name')
+                 and a['package'].get('ecosystem') == pkg.get('ecosystem')
+                 for r in a.get('ranges') or [] if isinstance(r, dict) for e in r.get('events') or []
+                 if isinstance(e, dict) and isinstance(e.get('fixed'), str) and newer(e['fixed'], pkg.get('version'))]
+        if not found:
+            return ''
+        best = min(found, key=version_key)
+        need = best if need is None or newer(best, need) else need
+    return need or ''
+
+
+def parse_osv(data, source_of=lambda path: ''):
+    """osv-scanner's JSON as an entry: one detail per vulnerable package, with the lockfiles it is in."""
+    pkgs = {}
+    for res in data.get('results') or [] if isinstance(data.get('results'), list) else []:
+        if not isinstance(res, dict):
+            continue
+        source = res.get('source')
+        path = source.get('path') if isinstance(source, dict) else None
+        for p in res.get('packages') or [] if isinstance(res.get('packages'), list) else []:
+            vulns = p.get('vulnerabilities') if isinstance(p, dict) else None
+            pkg = p.get('package') if isinstance(p, dict) else None
+            if not isinstance(vulns, list) or not vulns or not isinstance(pkg, dict):
+                continue
+            pkg = {k: str(pkg.get(k) or '') for k in ('name', 'version', 'ecosystem')}
+            d = pkgs.setdefault((pkg['name'], pkg['version'], pkg['ecosystem']),
+                                {**pkg, 'ids': set(), 'severity': '', 'fixed': fixed_version(pkg, vulns), 'sources': set(),
+                                 'groups': set()})
+            for g in p.get('groups') or [] if isinstance(p.get('groups'), list) else []:
+                if isinstance(g, dict):
+                    ids = frozenset(i for i in g.get('ids') or [] if isinstance(i, str))
+                    d['ids'].update(ids)
+                    d['groups'].add(ids)  # one group is one issue, whatever its aliases
+                    d['severity'] = max(d['severity'], str(g.get('max_severity') or ''), key=score)
+            d['ids'].update(v['id'] for v in vulns if isinstance(v, dict) and isinstance(v.get('id'), str))
+            if isinstance(path, str) and source_of(path):
+                d['sources'].add(source_of(path))
+    details = [{**{k: v for k, v in d.items() if k != 'groups'}, 'ids': sorted(d['ids']), 'level': level_of(d['severity']),
+                'sources': sorted(d['sources']), 'advisories': len(d['groups']) or len(d['ids']) or 1}
+               for _, d in sorted(pkgs.items())]
+    return {'count': len(details), 'max': max((d['severity'] for d in details), key=score, default=''),
+            'level': top_level(d['level'] for d in details), 'details': details, 'gaps': []}
+
+
+def score(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return -1.0
+
+
+def parse_brew(data):
+    """brew vulns --json: formulae with an unpatched vulnerability, and what it did not check. Its fixed
+    versions are mostly commits, so `fixed` stays empty."""
+    details = []
+    # For these brew scanned the current formula, not what is installed: its findings say nothing about the latter.
+    current_only = {n for n in data.get('outdated_without_sbom') or [] if isinstance(n, str)}
+    for f in data.get('findings') or [] if isinstance(data.get('findings'), list) else []:
+        vulns = [v for v in f.get('vulnerabilities') or [] if isinstance(v, dict)] if isinstance(f, dict) else []
+        if not vulns or f.get('formula') in current_only:
+            continue
+        level = top_level(level_of(v.get('severity')) for v in vulns)
+        ids = sorted({v['id'] for v in vulns if isinstance(v.get('id'), str)})
+        details.append({'name': str(f.get('formula') or ''), 'version': str(f.get('version') or ''), 'ecosystem': 'Homebrew',
+                        'ids': ids, 'severity': level.upper(), 'level': level, 'fixed': '', 'sources': [],
+                        'advisories': len(ids) or 1})
+    skipped = sum(len(data.get(k) or []) for k in ('skipped_formulae', 'unscanned_formulae', 'outdated_without_sbom'))
+    gaps = [f'{skipped} formulae not checked by brew vulns'] if skipped or not data.get('complete') else []
+    level = top_level(d['level'] for d in details)
+    return {'count': len(details), 'max': level.upper(), 'level': level, 'details': details,
+            'gaps': gaps + ['casks not covered']}
+
+
+def scan_json(cmd, label, clean=()):
+    """Runs a scanner that exits 1 when it finds something; `clean` exit codes mean "nothing to scan"."""
+    timeout = time_left(SCAN_SECONDS)
+    if timeout < 1:
+        raise ScanError(f'{label} not run: out of time')
+    try:
+        r = subprocess.run([shutil.which(cmd[0]) or cmd[0], *cmd[1:]], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise ScanError(f'{label} did not run: {type(err).__name__}') from err
+    if r.returncode in clean:
+        return {}
+    try:
+        data = json.loads(r.stdout) if r.returncode in (0, 1) else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise ScanError(f'{label} failed (exit {r.returncode}); offline?')
+    return data
+
+
+def osv_lockfiles(paths, label, source_of=lambda path: ''):
+    """osv-scanner exits 128 when it finds no packages. The empty --config keeps a scanned project's own
+    osv-scanner.toml from ignoring its findings. Every path is absolute (from the user's list or a walk
+    under it), so none reads as a flag."""
+    if not paths:
+        return {'count': 0, 'max': '', 'level': '', 'details': [], 'gaps': []}
+    with tempfile.TemporaryDirectory(prefix='uptick-osv-') as tmp:
+        config = os.path.join(tmp, 'osv-scanner.toml')
+        os.close(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        cmd = ['osv-scanner', 'scan', 'source', '--config', config, *[a for p in paths for a in ('-L', p)], '--format', 'json']
+        return parse_osv(scan_json(cmd, label, clean=(128,)), source_of)
+
+
+def lockfiles_under(root):
+    """The lockfiles under root, and how many were left out: a link (it may point outside root) or a path with
+    a colon (osv-scanner reads `x:path` as a parser name)."""
+    found, left_out = [], 0
+    for n, (here, dirs, files) in enumerate(os.walk(root)):
+        if out_of_time():
+            raise ScanError('lockfile search stopped: out of time')
+        if n >= MAX_FOLDERS:
+            raise ScanError(f'more than {MAX_FOLDERS} folders: not scanned')
+        dirs[:] = sorted(d for d in dirs if d not in ('node_modules', '.git'))
+        for path in (os.path.join(here, f) for f in files if f in LOCKFILES):
+            ok = ':' not in os.path.splitdrive(path)[1] and not os.path.islink(path)  # C: on Windows is fine
+            found += [path] if ok else []
+            left_out += not ok
+    return sorted(found), left_out
+
+
+def sbom(tree):
+    """CycloneDX SBOM of an `npm ls -g --all --json` tree: every node with a version, once."""
+    comps = {}
+
+    def walk(node):
+        deps = node.get('dependencies') if isinstance(node, dict) else None
+        for name, dep in deps.items() if isinstance(deps, dict) else ():
+            if isinstance(dep, dict) and isinstance(dep.get('version'), str):
+                purl = 'pkg:npm/' + quote(name, safe='/') + '@' + quote(dep['version'], safe='')
+                comps[purl] = {'type': 'library', 'name': name, 'version': dep['version'], 'purl': purl}
+            walk(dep)
+
+    walk(tree)
+    return {'bomFormat': 'CycloneDX', 'specVersion': '1.5', 'components': list(comps.values())}
+
+
+def scan_brew():
+    return parse_brew(scan_json(['brew', 'vulns', '--json'], 'brew vulns'))
+
+
+def appium_lock():
+    return os.path.join(HOME, '.appium', 'package-lock.json')
+
+
+def scan_appium():
+    return osv_lockfiles([appium_lock()], 'osv-scanner (Appium)')
+
+
+def scan_npm_global():
+    # npm ls exits 1 on any invalid or missing dependency and still prints the whole tree.
+    timeout = time_left(60)
+    try:
+        r = subprocess.run([shutil.which('npm') or 'npm', 'ls', '-g', '--all', '--json'], capture_output=True, text=True,
+                           timeout=timeout) if timeout >= 1 else None
+        tree = json.loads(r.stdout) if r is not None and r.returncode in (0, 1) else None
+    except (OSError, subprocess.TimeoutExpired, ValueError, RecursionError):
+        r, tree = None, None
+    if not isinstance(tree, dict) or (r.returncode == 1 and not isinstance(tree.get('dependencies'), dict)):
+        raise ScanError('npm ls -g failed')
+    with tempfile.TemporaryDirectory(prefix='uptick-sbom-') as tmp:
+        path = os.path.join(tmp, 'global-npm.cdx.json')
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as f:
+            json.dump(sbom(tree), f)
+        return osv_lockfiles([path], 'osv-scanner (global npm)')
+
+
+def plugin_installs():
+    """{install path: (plugin id, version)} from installed_plugins.json, so stale cached versions do not count."""
+    with open(os.path.join(HOME, '.claude', 'plugins', 'installed_plugins.json'), encoding='utf-8') as f:
+        plugins = json.load(f).get('plugins')
+    return {i['installPath']: (pid, str(i.get('version') or '')) for pid, group in plugins.items() if isinstance(group, list)
+            for i in group if isinstance(i, dict) and isinstance(i.get('installPath'), str) and os.path.isabs(i['installPath'])}
+
+
+def left_out_gap(n):
+    return [f'{n} lockfiles left out (a link, or a colon in the path)'] if n else []
+
+
+def scan_plugins():
+    try:
+        installs = plugin_installs()
+    except (OSError, ValueError, AttributeError, RecursionError) as err:
+        raise ScanError('installed_plugins.json not readable') from err
+    paths, bare, left_out = [], 0, 0
+    for root in sorted(installs):
+        found, n = lockfiles_under(root)
+        paths, bare, left_out = paths + found, bare + (not found), left_out + n
+
+    def source_of(path):
+        return next((pid for root, (pid, _) in installs.items() if path.startswith(root.rstrip(os.sep) + os.sep)), '')
+    result = osv_lockfiles(paths, 'osv-scanner (Claude Code plugins)', source_of)
+    result['gaps'] = ([f'{bare} of {len(installs)} plugin installs without a lockfile'] if bare else []) + left_out_gap(left_out)
+    # The version each finding was scanned at: a plugin updated since then is not marked with them.
+    result['versions'] = {pid: version for pid, version in installs.values()}
+    return result
+
+
+def scan_repo(root):
+    if not os.path.isdir(root):
+        raise ScanError('not a folder')
+    found, left_out = lockfiles_under(root)
+    result = osv_lockfiles(found, 'osv-scanner', lambda path: os.path.relpath(path, root))
+    result['gaps'] = left_out_gap(left_out)
+    return result
+
+
+def machine_scanners():
+    """target -> (tools it needs, scan); a target whose tool or file is absent is left out."""
+    return {
+        'brew': (('brew',), scan_brew),
+        'npm-global': (('npm', 'osv-scanner'), scan_npm_global),
+        'claude-plugins': (('osv-scanner',), scan_plugins),
+        **({'appium': (('osv-scanner',), scan_appium)} if os.path.isfile(appium_lock()) else {}),
+    }
+
+
+def config_path(name):
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.config'), 'uptick', name)
+
+
+def vulns_cache_path():
+    return os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.join(HOME, '.cache'), 'uptick', 'vulns.json')
+
+
+def load_repo_list():
+    """The repositories opted in to scanning (scan-repos.json, {"repos": ["/abs/path", ...]}), and problems."""
+    path = config_path('scan-repos.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            listed = json.load(f).get('repos')
+    except FileNotFoundError:
+        return [], []
+    except (OSError, ValueError, AttributeError, RecursionError):
+        listed = None
+    if not isinstance(listed, list):  # None, not []: a half-saved list must not wipe the repositories' results
+        return None, [{'text': 'scan-repos.json not readable: no repository scanned', 'hint': f'fix {path}'}]
+    repos = [p for p in listed if isinstance(p, str) and os.path.isabs(p) and '\0' not in p]
+    bad = len(listed) - len(repos)
+    return sorted(set(repos)), [{'text': f'scan-repos.json: ignored {bad} entries that are not absolute paths',
+                                 'hint': f'fix {path}'}] if bad else []
+
+
+def clean_entry(e):
+    """A cache entry with every field of the right type, or None when it holds nothing usable."""
+    if not isinstance(e, dict):
+        return None
+
+    def num(d, k):
+        v = d.get(k)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 1e13 else 0
+
+    def text(d, k):
+        return d[k] if isinstance(d.get(k), str) else ''
+
+    def texts(d, k):
+        return sorted({s for s in d[k] if isinstance(s, str)}) if isinstance(d.get(k), list) else []
+    details = [{'name': d['name'], 'version': text(d, 'version'), 'ecosystem': text(d, 'ecosystem'), 'ids': texts(d, 'ids'),
+                'severity': text(d, 'severity'), 'level': level_of(text(d, 'severity')), 'fixed': text(d, 'fixed'),
+                'sources': texts(d, 'sources'), 'advisories': int(num(d, 'advisories')) or len(texts(d, 'ids')) or 1}
+               for d in e.get('details') or [] if isinstance(d, dict) and isinstance(d.get('name'), str)] \
+        if isinstance(e.get('details'), list) else []
+    prev, versions = e.get('prev'), e.get('versions')
+    out = {'at': num(e, 'at'), 'tried': num(e, 'tried'), 'count': int(num(e, 'count')), 'max': text(e, 'max'),
+           **({'versions': {k: v for k, v in versions.items() if isinstance(v, str)}} if isinstance(versions, dict) else {}),
+           'level': top_level(d['level'] for d in details), 'details': details, 'gaps': texts(e, 'gaps'),
+           'error': text(e, 'error'), 'hint': text(e, 'hint'),
+           'prev': {'count': int(num(prev, 'count')), 'max': text(prev, 'max')} if isinstance(prev, dict) else None}
+    return out if out['at'] or out['error'] else None
+
+
+def entries(raw, keep):
+    return {k: e for k, x in (raw.items() if isinstance(raw, dict) else ()) if k in keep and (e := clean_entry(x))}
+
+
+def refresh(found, scanners, now, force=False):
+    """Rescans the due targets in parallel and stores a result or an error for each; returns the missing
+    tools as {target: tool}."""
+    missing, due = {}, {}
+    for target, (tools, fn) in scanners.items():
+        absent = next((t for t in tools if not shutil.which(t)), None)
+        e = found.get(target) or {'at': 0, 'tried': 0}
+        age, tried = now - e['at'], now - e['tried']  # below 0: a clock set back, or a time in ms; scan again
+        if absent:
+            missing[target] = absent
+        elif force or ((age >= DAY or age < 0) and (tried >= RETRY_AFTER or tried < 0)):
+            due[target] = fn
+    with ThreadPoolExecutor(min(4, max(1, len(due)))) as pool:
+        futures = {t: pool.submit(fn) for t, fn in due.items()}
+    for target, fut in futures.items():
+        old = found.get(target)
+        try:
+            prev = {'count': old['count'], 'max': old['max']} if old and old['at'] else None  # what "worse" is measured against
+            # Stored as it reads back, so a check with nothing due does not rewrite the file.
+            found[target] = clean_entry({'error': '', 'hint': '', **fut.result(), 'at': now, 'tried': now, 'prev': prev})
+        except Exception as err:  # the last good result stays; the others still count
+            last = old or {'at': 0, 'count': 0, 'max': '', 'level': '', 'details': [], 'gaps': [], 'prev': None}
+            text = str(err) if isinstance(err, ScanError) else f'scan crashed: {type(err).__name__}'
+            found[target] = clean_entry({**last, 'tried': now, 'error': text[:200], 'hint': ''})
+    return missing
+
+
+def scan_vulns(force=False):
+    """Scans what is due (the machine, the listed repositories), saves the cache when it changed, and
+    returns it with the problems and skips for the report."""
+    path = vulns_cache_path()
+    try:
+        with open(path, encoding='utf-8') as f:
+            raw = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    now = time.time()
+    machine = machine_scanners()
+    listed, problems = load_repo_list()
+    repos = listed or []
+    kept = repos if listed is not None else (raw.get('repos') if isinstance(raw.get('repos'), dict) else {})
+    cache = {'schema': 1, 'targets': entries(raw.get('targets'), machine), 'repos': entries(raw.get('repos'), kept)}
+    missing = refresh(cache['targets'], machine, now, force)
+    for root, tool in refresh(cache['repos'], {r: (('osv-scanner',), lambda r=r: scan_repo(r)) for r in repos}, now, force).items():
+        old = cache['repos'].get(root) or {'at': 0, 'tried': now, 'count': 0, 'max': '', 'details': [], 'gaps': [], 'prev': None}
+        if old.get('error') != f'{tool} not found':  # set once: every check would rewrite the file otherwise
+            cache['repos'][root] = clean_entry({**old, 'tried': now, 'error': f'{tool} not found', 'hint': INSTALL_HINT})
+    if json.dumps(cache, sort_keys=True) != json.dumps(raw, sort_keys=True):  # also drops what left the list
+        try:
+            write_atomically(path, cache)
+        except OSError as err:
+            problems.append({'text': f'vulnerability cache not written: {err.strerror}'})
+    skipped = [f'{t} not scanned for vulnerabilities: {tool} not found' + (f' ({INSTALL_HINT})' if tool == 'osv-scanner' else '')
+               for t, tool in missing.items() if tool != 'brew']
+    return {'cache': cache, 'now': now, 'problems': problems, 'skipped': skipped}
+
+
+def ago(seconds):
+    s = int(seconds)
+    return f'{s // DAY} d ago' if s >= DAY else f'{s // 3600} h ago' if s >= 3600 else f'{s // 60} min ago'
+
+
+def add_vulns(rep, scan):
+    """The Uptick view: an outdated formula or plugin with a known vulnerability gets a count and a level on
+    its row. A finding without an update row stays in the cache and the checked list: no row without a fix."""
+    targets, now = scan['cache']['targets'], scan['now']
+    rep.problems += scan['problems']
+    rep.skipped += scan['skipped']
+    def fresh(target):  # a target that keeps failing must not mark rows with old findings forever
+        e = targets.get(target) or {'at': 0}
+        return e if 0 <= now - e['at'] < 2 * DAY else {'details': [], 'versions': {}}
+    brew = {d['name']: d for d in fresh('brew')['details']}
+    plugins, scanned_at = {}, fresh('claude-plugins').get('versions') or {}
+    for d in fresh('claude-plugins')['details']:
+        for pid in d['sources']:
+            plugins.setdefault(pid, []).append(d)
+    for item in rep.items:
+        have = str(item.get('have', ''))
+        if item.get('kind') == 'brew' and not item.get('cask'):
+            d = brew.get(item['id']) or brew.get(item['id'].split('/')[-1])
+            # Only the findings of the installed version; brew vulns names it without the _1 revision.
+            found = [d] if d and d['version'] == re.sub(r'_\d+$', '', have) else []
+        elif item.get('kind') == 'plugin':
+            found = plugins.get(item['id']) if scanned_at.get(item['id']) == have else []
+        else:
+            continue
+        if found:
+            item['vulns'] = {'count': sum(d['advisories'] for d in found), 'level': top_level(d['level'] for d in found)}
+    for target, e in targets.items():
+        if e['at']:
+            stale = [f"scanned {ago(now - e['at'])}"] if now - e['at'] >= DAY else []
+            note = '; '.join(e['gaps'] + stale)
+            rep.checked.append(f"security: {target}: {e['count']} vulnerable" + (f" (max {e['level']})" if e['level'] else '')
+                               + (f' ({note})' if note else ''))
+        if e['error']:
+            last = f"last good result {ago(now - e['at'])}" if e['at'] else 'never scanned'
+            rep.problem(f"security: {target}: scan failed: {e['error']}; {last}", e['hint'] or 'tried again after an hour')
+    repos = scan['cache']['repos']
+    if repos:
+        rep.checked.append(f'security: {len(repos)} repositories (for the inbox)')
+
+
 def merge_extra(rep, command):
     """Runs the extra command and merges its JSON (same schema); a failure is one problem row."""
     try:
@@ -472,8 +895,9 @@ def merge_extra(rep, command):
     rep.skipped += [str(s) for s in data.get('skipped') or []]
 
 
-def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None):
-    """kinds: the set of KINDS to check, None for all; Claude Code and the extra check always run."""
+def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None, vulns_now=False):
+    """kinds: the set of KINDS to check, None for all but vulns, which is only ever named; Claude Code and
+    the extra check always run. vulns_now: rescan every target, whatever the cache's age."""
     global DEADLINE
     try:
         rep = Report(load_known_broken(known_broken))
@@ -490,13 +914,21 @@ def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None)
     ]
     DEADLINE = time.monotonic() + TOTAL_SECONDS
     try:
-        for kind, name, run_check in checks:
-            if kind and kinds is not None and kind not in kinds:
-                continue
-            try:
-                run_check()
-            except Exception as err:  # one broken check must not cost the others, the JSON or the cache
-                rep.problem(f'{name} not checked: {type(err).__name__}: {err}')
+        with ThreadPoolExecutor(1) as pool:
+            # The scans run beside the other checks; their own cache keeps them to once a day per target.
+            scans = pool.submit(scan_vulns, vulns_now) if kinds is not None and 'vulns' in kinds else None
+            for kind, name, run_check in checks:
+                if kind and kinds is not None and kind not in kinds:
+                    continue
+                try:
+                    run_check()
+                except Exception as err:  # one broken check must not cost the others, the JSON or the cache
+                    rep.problem(f'{name} not checked: {type(err).__name__}: {err}')
+            if scans is not None:
+                try:
+                    add_vulns(rep, scans.result())
+                except Exception as err:
+                    rep.problem(f'vulnerability scan not done: {type(err).__name__}: {err}')
         if out_of_time():
             rep.problem(f'check stopped after {TOTAL_SECONDS // 60} minutes: some results are missing',
                         'try again later, or narrow kinds in /config')
@@ -534,7 +966,11 @@ def text(result):
             lines.append(f"  · {name}: {it.get('have', '?')} → {it.get('latest', '?')} ({it.get('note') or SELF_NOTE})")
         else:
             how = it.get('note') or HOW.get(it['kind'], it['kind']).format(id=it['id'])
-            lines.append(f"  ↑ {name}: {it.get('have', '?')} → {it.get('latest', '?')}   [{how}]")
+            v = it.get('vulns')
+            # An extra check's item comes through whole: only the checker's own shape is shown.
+            flag = f"   ! {v['count']} known vulnerabilities (max {v['level']})" if isinstance(v, dict) and isinstance(
+                v.get('count'), int) and v.get('level') in LEVELS else ''
+            lines.append(f"  ↑ {name}: {it.get('have', '?')} → {it.get('latest', '?')}   [{how}]{flag}")
     lines += [f"  ? {p.get('text', '')}" + (f" ({p['hint']})" if p.get('hint') else '') for p in result['problems']]
     lines += [f'  · {s}' for s in result['skipped']]
     if not result['items'] and not result['problems']:
@@ -551,10 +987,11 @@ def main(argv=None):
     ap.add_argument('--known-broken')
     ap.add_argument('--extra')
     ap.add_argument('--kinds')
+    ap.add_argument('--vulns-now', action='store_true')
     args = ap.parse_args(argv)
     listed = None if args.kinds is None else {k.strip() for k in args.kinds.split(',')} - {''}
     kinds = set(DEFAULT_KINDS) if listed is None else listed & set(KINDS)
-    result = check(args.fetch, args.brewfile, args.known_broken, args.extra, kinds)
+    result = check(args.fetch, args.brewfile, args.known_broken, args.extra, kinds, args.vulns_now)
     unknown = ', '.join(f'"{k}"' for k in sorted(listed - set(KINDS))) if listed else ''
     if unknown:
         # A typo must not silently turn a group off.

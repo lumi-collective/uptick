@@ -34,6 +34,21 @@ Homebrew and uv, and you would rather not run five different update commands to 
 A check whose tool is missing is skipped. A plugin whose version is not a version (a git hash, or none
 advertised) is listed under Info as `not compared`, never offered.
 
+### Vulnerability scan, off until you add `vulns` to `kinds`
+
+With `vulns` in `kinds`, the checker also looks for known vulnerabilities, at most once a day per target:
+your Homebrew formulae (`brew vulns`), and with [osv-scanner](https://google.github.io/osv-scanner/) the
+global npm packages, the Appium install (`~/.appium/package-lock.json`, when it exists) and the lockfiles of
+your installed plugins. An update row whose installed version was found vulnerable in the last two days
+says how many and how bad (`3 vulns (high)`): the update replaces that version. A finding with no update
+to offer is counted in the checked list only, never a row of its own: a row always comes with a command.
+
+The details, with the advisory IDs and package names, stay in a local file,
+`${XDG_CACHE_HOME:-~/.cache}/uptick/vulns.json`. The checker also scans the repositories you list in
+`${XDG_CONFIG_HOME:-~/.config}/uptick/scan-repos.json` (`{"repos": ["/absolute/path", ...]}`; none by
+default) into the same file, for other tools to show; they are not rows in Uptick. `--vulns-now` rescans
+everything at once.
+
 ## Requirements
 
 - **Claude Code on your own computer.** Uptick runs programs on the machine Claude Code runs on, so it works
@@ -45,7 +60,9 @@ advertised) is listed under Info as `not compared`, never offered.
   - **npm**: compares Claude Code with the registry, and runs skill updates through `npx`;
   - **gh**, signed in: compares skills, and plugins kept in their own GitHub repo;
   - **Homebrew**: the Homebrew group;
-  - **uv** 0.10.10 or newer: the uv tools group, once you add `uv` to `kinds` (see [Settings](#settings)).
+  - **uv** 0.10.10 or newer: the uv tools group, once you add `uv` to `kinds` (see [Settings](#settings));
+  - **osv-scanner** (`brew install osv-scanner`), and Homebrew with `brew vulns`: the vulnerability scan,
+    once you add `vulns` to `kinds`.
 
 ## Where it works
 
@@ -78,10 +95,12 @@ In the desktop app: + next to the prompt box → Plugins → Add marketplace `lu
 Update: `claude plugin update uptick@uptick`, then `/reload-plugins`.
 Uninstall: `claude plugin uninstall uptick@uptick`.
 
-Uptick keeps two files of its own; uninstalling leaves them, and you can remove them by hand:
+Uptick keeps these files of its own; uninstalling leaves them, and you can remove them by hand:
 
 - the last result: `${XDG_CACHE_HOME:-~/.cache}/uptick/last.json` (on Windows `%USERPROFILE%\.cache\uptick\last.json`);
-- the known-broken list, if you made one: `${XDG_CONFIG_HOME:-~/.config}/uptick/known-broken.json`.
+- with `vulns` in `kinds`, the scan results: `${XDG_CACHE_HOME:-~/.cache}/uptick/vulns.json`;
+- the known-broken list, if you made one: `${XDG_CONFIG_HOME:-~/.config}/uptick/known-broken.json`;
+- the list of repositories to scan, if you made one: `${XDG_CONFIG_HOME:-~/.config}/uptick/scan-repos.json`.
 
 ## Using it
 
@@ -117,7 +136,9 @@ Under `claude -p "/uptick"` you get a plain-text report and nothing is installed
 `py -3`), when the pane opens, when you press Check now, again after each run of confirmed updates, and for
 `claude -p "/uptick"`. It asks `claude`,
 `npm`, `gh`, `brew` and, when `uv` is in `kinds`, `uv` (`uv tool list --outdated`) for installed and latest versions, and runs your
-`checkCommand` if you set one. With
+`checkCommand` if you set one. When `vulns` is in `kinds`, at most once a day per target, it runs
+`brew vulns --json`, `npm ls -g --all --json` and `osv-scanner scan source` on the lockfiles it found, with
+an empty config of its own so that a scanned folder's `osv-scanner.toml` cannot hide a finding. With
 Check now (or `fetchOnOpen`) it first runs `claude plugin marketplace update` per marketplace and
 `brew update`.
 
@@ -125,7 +146,9 @@ Check now (or `fetchOnOpen`) it first runs `claude plugin marketplace update` pe
 skills' metadata (`claude plugin list`, `~/.claude/plugins/known_marketplaces.json` and `marketplaces/`,
 `~/.agents/.skill-lock.json`); the list of your uv tools, with the version specifier or source each was
 installed with (`uv tool list --outdated --show-version-specifiers`); the Brewfile, if you set one; the known-broken list, yours or the default one
-when it exists; and the environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
+when it exists; with `vulns` in `kinds`, its scan file `vulns.json`, `~/.claude/plugins/installed_plugins.json`,
+the lockfiles under each plugin install, `~/.appium/package-lock.json`, `scan-repos.json` and the lockfiles
+of the repositories it lists (`node_modules` and `.git` left out); and the environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
 `XDG_CONFIG_HOME`, to find those files. To tell whether Claude Code updates itself, it reads
 `DISABLE_UPDATES`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` from the environment
 and from the `env` block of `~/.claude/settings.json`; nothing else in that file.
@@ -159,6 +182,10 @@ administrator password fails at once instead of waiting for one; run it in a ter
 - only when `uv` is in `kinds`: PyPI, or the package index you set for uv, through `uv tool list
   --outdated`: the name of every uv tool, on every check, also of one installed from git, a URL or a folder
   (shown as `not compared`), for its latest version;
+- only when `vulns` is in `kinds`, at most once a day per target: api.osv.dev, through `brew vulns` and
+  `osv-scanner`: the names and versions of your Homebrew formulae, global npm packages, Appium and plugin
+  dependencies, and of the packages in the lockfiles of the repositories in `scan-repos.json`; `brew vulns`
+  also downloads Homebrew's public advisory list from formulae.brew.sh and raw.githubusercontent.com;
 - with **Check now** or `fetchOnOpen`: `claude plugin marketplace update` per marketplace and `brew update`;
 - and when you confirm an update, whatever that tool fetches.
 
@@ -171,7 +198,7 @@ In `/config`, or at install with `--config <key>=<value>`:
 
 | Key | Values | Default | What it does |
 |---|---|---|---|
-| `kinds` | comma list of `plugin`, `skill`, `brew`, `uv` | `plugin,skill,brew` | which groups to check and update; a group left out is not checked at all. `uv` is off by default: add it here, in `UPTICK_KINDS` or with `--kinds`, and the name of every uv tool then goes to PyPI (or your uv index) on every check |
+| `kinds` | comma list of `plugin`, `skill`, `brew`, `uv`, `vulns` | `plugin,skill,brew` | which groups to check and update; a group left out is not checked at all. `uv` is off by default: add it here, in `UPTICK_KINDS` or with `--kinds`, and the name of every uv tool then goes to PyPI (or your uv index) on every check. `vulns` is off by default too: it turns on the [vulnerability scan](#vulnerability-scan-off-until-you-add-vulns-to-kinds), which sends package names and versions to api.osv.dev once a day |
 | `brewfile` | a path | empty | list only the outdated packages this Brewfile names |
 | `knownBroken` | a path | empty: `${XDG_CONFIG_HOME:-~/.config}/uptick/known-broken.json` if it exists | upstream versions to hold back |
 | `checkCommand` | a command | empty | your own check, merged into the list |
@@ -236,8 +263,19 @@ and `latest` per package, so the same script works for it with that command swap
 }
 ```
 
-`items` lists only what has a newer version, or a note. A cask carries `"cask": true`. New fields may be
-added; existing ones keep their names.
+`items` lists only what has a newer version, or a note. A cask carries `"cask": true`. With the
+vulnerability scan on, an update whose installed version is vulnerable carries
+`"vulns": {"count": 3, "level": "high"}` (`level`: `unknown`, `low`, `medium`, `high` or `critical`). New
+fields may be added; existing ones keep their names.
+
+`vulns.json` holds `targets` (`brew`, `npm-global`, `appium`, `claude-plugins`) and `repos` (keyed by the
+path in `scan-repos.json`). Each entry has `at` and `tried` (Unix seconds of the last good scan and of the
+last try), `count`, `max`, `level`, `gaps`, `error`, `hint`, `prev` (the count and max of the scan before)
+and `details`: one per vulnerable package, with `name`, `version`, `ecosystem`, `ids`, `advisories` (how
+many issues, an alias counted once), `severity`, `level`, `fixed` (the lowest version that fixes them all,
+empty when there is none) and `sources` (the lockfiles within a repository, or the plugin ids). The
+plugins' entry also has `versions`, each plugin's version at the scan. A lockfile that is a link, or has a
+colon in its path, is left out and counted in `gaps`.
 
 ### Running the checker yourself
 
@@ -308,7 +346,13 @@ shows what is new around Claude Code and updates one item at a time, after you c
   tool is offered. With a constraint pin, `uv tool upgrade` prints its pin hint and the pane shows a failure;
   with an override pin it only says "Nothing to upgrade", the pane shows it as done, and the row comes back on
   the next check.
-- An entry in `kinds` that is not `plugin`, `skill`, `brew` or `uv` (a typo such as `skill;`) is ignored, so the group you
+- The vulnerability scan does not cover casks, and `brew vulns` skips formulae it cannot map to a source
+  (the checked list says how many). A finding in a plugin's dependencies marks the plugin's update, which
+  may or may not carry the fix. A finding in a global npm package or Appium is never a row: Uptick does not
+  update those. A scan waits for its lockfile search, which stops at 20000 folders (`node_modules` and
+  `.git` aside) and then fails that target; the update list waits for the scans, within the check's time
+  limit. A row narrower than 40 columns shows no count.
+- An entry in `kinds` that is not `plugin`, `skill`, `brew`, `uv` or `vulns` (a typo such as `skill;`) is ignored, so the group you
   meant is not checked. The result shows a problem row that names the entry.
 - `claude plugin update` runs from your home folder, so a plugin installed at project or local scope may
   not update from the pane; run it in that project.

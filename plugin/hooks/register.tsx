@@ -22,6 +22,7 @@ import {
   signature,
   sortItems,
   UPDATE_ENV,
+  vulnsText,
   when,
 } from './logic.ts'
 
@@ -361,6 +362,7 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
     const lead = 'hotkey' in hotkey ? '' : '   '
     const select = () => confirmFor([keyOf(item)])
     const cask = item.cask === true ? 'cask' : ''
+    const flag = vulnsText(item)
     if (w < 40)
       return (
         <Button key={key} plain {...hotkey} onPress={select}>
@@ -380,6 +382,7 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
             {'     '}
             {versions}
             {cask ? <Text dimColor>{`  ${cask}`}</Text> : null}
+            {flag ? <Text color="error">{`  ${flag}`}</Text> : null}
           </Text>
         </Box>
       )
@@ -390,7 +393,9 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
         {fit(item.name, nameW)}
         {'  '}
         {versions}
-        {cask ? [pad, '  ', <Text dimColor>{cask}</Text>] : null}
+        {cask || flag ? pad : null}
+        {cask ? ['  ', <Text dimColor>{cask}</Text>] : null}
+        {flag ? ['  ', <Text color="error">{flag}</Text>] : null}
       </Button>
     )
   }

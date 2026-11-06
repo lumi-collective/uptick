@@ -31,7 +31,7 @@
     "kinds": {
       "type": "string",
       "title": "Kinds",
-      "description": "Comma list of the kinds to show and update: plugin, skill, brew, uv. Add uv to check uv tools; their names then go to PyPI (or your uv index) on every check.",
+      "description": "Comma list of the kinds to show and update: plugin, skill, brew, uv. Add uv to check uv tools; their names then go to PyPI (or your uv index) on every check. Add vulns to mark updates that replace a vulnerable version (brew vulns; osv-scanner for npm, Appium and plugins); package names and versions then go to api.osv.dev once a day.",
       "default": "plugin,skill,brew"
     },
     "hint": {
