@@ -3,12 +3,12 @@
   "owner": {
     "name": "trustmeimlumi"
   },
-  "description": "Uptick, a Claude Code mod: updates for Claude Code, plugins, skills, Homebrew and uv tools, run only after you confirm.",
+  "description": "Uptick, a Claude Code mod: updates for Claude Code, plugins, skills, Homebrew, uv tools and winget packages, run only after you confirm.",
   "plugins": [
     {
       "name": "uptick",
       "source": "./plugin",
-      "description": "Lists updates for Claude Code, plugins, skills-CLI skills, Homebrew and uv tools in a pane, and runs one only after you confirm it."
+      "description": "Lists updates for Claude Code, plugins, skills-CLI skills, Homebrew, uv tools and winget packages in a pane, and runs one only after you confirm it."
     }
   ]
 }

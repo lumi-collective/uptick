@@ -1,7 +1,7 @@
 /** One row of the checker's JSON: something with a newer version, or a note about one. */
 export type ToolItem = {
   id: string
-  /** plugin | skill | brew | uv (the mod may update these), self | info (shown only), broken (a note) */
+  /** plugin | skill | brew | uv | winget (the mod may update these), self | info (shown only), broken (a note) */
   kind: string
   name: string
   have: string

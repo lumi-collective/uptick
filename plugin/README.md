@@ -5,7 +5,7 @@ command.
 
 Type /uptick to open a pane that lists newer versions of Claude Code itself, your plugins, the skills you
 installed with the skills CLI, your Homebrew packages and, if you turn them on, the tools you installed with
-uv tool install. Pick one item or all of them, read the command it will run, and confirm. A line above the
+uv tool install and, on Windows, your winget packages. Pick one item or all of them, read the command it will run, and confirm. A line above the
 prompt tells you when updates are waiting.
 
 With the opt-in vulnerability scan turned on, updates that replace a vulnerable version are marked.
@@ -26,8 +26,9 @@ the pane. It does not work on claude.ai on the web or on mobile, or in Cowork.
 - When the pane opens, when you press Check now, again after each run of confirmed updates and after a Skip,
   for a claude -p "/uptick" report, and at a session start when the last check is more than a day old or no check
   has fetched for a day: the bundled checker, with python3 (on Windows, the py launcher). The
-  checker asks claude, npm, gh, brew and, when uv is in the kinds setting, uv (uv tool list --outdated) for
-  installed and latest versions. When vulns is in the kinds setting, once a day per target (an hour after a
+  checker asks claude, npm, gh, brew, when uv is in the kinds setting uv (uv tool list --outdated) and, when
+  winget is in the kinds setting on Windows, winget (winget upgrade --disable-interactivity) for installed and
+  latest versions. When vulns is in the kinds setting, once a day per target (an hour after a
   failed scan), it also runs brew vulns, npm ls -g and osv-scanner on the global npm tree and the lockfiles
   it found, with an empty osv-scanner config of its own, so that a scanned folder's config cannot hide a
   finding. It installs nothing; with Check now, at a session start when no check has fetched for a day, or on
@@ -35,8 +36,12 @@ the pane. It does not work on claude.ai on the web or on mobile, or in Cowork.
 - Only after you press Update in the confirm step: one fixed command per item, built from a template and
   the item's name, which must match a strict pattern. A plugin updates through claude, a skill through
   npx running the skills CLI (pinned to version 1.7.4), a Homebrew package through brew, a uv tool
-  through uv tool upgrade. Each runs from your home folder, as an argument list without a shell; on
-  Windows, npx and claude start through cmd.exe, and the confirm step shows cmd.exe /d /c before them.
+  through uv tool upgrade, a winget package through winget upgrade --id with its id, --exact,
+  --accept-package-agreements and --disable-interactivity, so that no prompt waits for an answer no one
+  sees. It accepts no source agreement for you: a source whose agreement you have not accepted fails the
+  update with winget's message. A package whose publisher asks winget to update it only by name is shown, never offered. Each runs from your home folder, as an argument list without a shell; on
+  Windows, npx and claude start through cmd.exe, and the confirm step shows cmd.exe /d /c before them;
+  winget starts as it is.
 - Reload plugins never runs anything: it only types /reload-plugins into your prompt, and you press Enter.
 - Skip, in the confirm step for one item, runs nothing either: it writes that version into your known-broken
   list (the knownBroken setting, else uptick/known-broken.json in your config folder). It adds that item's
@@ -56,7 +61,7 @@ before PATH.
 
 Its own cache file (the last result, in your cache folder), the metadata of your installed plugins and
 skills, the list of your uv tools with the version specifier or source each was installed with (through
-uv), a Brewfile if you set one, and a known-broken list if you set one or the default file exists in
+uv), the list of your winget packages with an upgrade (through winget), a Brewfile if you set one, and a known-broken list if you set one or the default file exists in
 your config folder. When vulns is in the kinds setting, it also reads its scan file (vulns.json in your
 cache folder), the list of your installed plugins and the lockfiles under each plugin install, the Appium
 lockfile in ~/.appium, and the list of repositories to scan (scan-repos.json in your config folder, none
@@ -71,7 +76,8 @@ empty osv-scanner config and a list of the global npm packages into a temporary 
 Claude Code's store for the plugin it keeps when a check last fetched, when a session start last tried one, and
 what Hide hid. Only when you press Skip does it write your known-broken list.
 
-What it passes on: the item names to the update commands (a uv tool's name to uv tool upgrade); your
+What it passes on: the item names to the update commands (a uv tool's name to uv tool upgrade, a winget
+package's id to winget upgrade); your
 marketplace names to claude plugin marketplace update; the GitHub repositories, folders and refs named in
 your plugin and skill metadata to gh api, which asks GitHub for them; and the Brewfile path, the
 known-broken path and your extra check command to the checker.
@@ -90,6 +96,13 @@ uv tools are off by default. Add uv to the kinds setting (in /config, UPTICK_KIN
 --kinds) to turn them on; uv tool list --outdated then sends the name of every uv tool to PyPI (or the
 package index you set for uv) on every check, also of one installed from git, a URL or a folder, which is
 shown as not compared.
+
+winget packages are off by default, and only ever checked on Windows. Add winget to the kinds setting to
+turn them on; winget upgrade then asks your winget sources on every check. By default these are the winget
+community repository and the Microsoft Store (cdn.winget.microsoft.com and storeedgefd.dsx.mp.microsoft.com,
+as Microsoft's docs list them; not measured). Uptick has not checked what winget sends them: it may include
+the ids of your installed packages for the Store source. winget also sends its own telemetry to Microsoft
+unless you turn it off in winget's settings. Uptick accepts no source agreement for you.
 
 The vulnerability scan is off by default. Add vulns to the kinds setting to turn it on; once a day per
 target (an hour after a failed scan), brew vulns and osv-scanner then send the names and versions of your

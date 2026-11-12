@@ -3,7 +3,7 @@ import type { PluginOptions } from 'claude-code'
 import type { CheckResult, Problem, ToolItem } from '../types'
 
 /** The kinds the mod may update, each by one fixed argv template. */
-export const UPDATABLE = ['plugin', 'skill', 'brew', 'uv'] as const
+export const UPDATABLE = ['plugin', 'skill', 'brew', 'uv', 'winget'] as const
 
 /** The skills CLI, pinned to the release this mod was tested with (checker/check_updates.py SKILLS_CLI). */
 export const SKILLS_CLI = 'skills@1.7.4'
@@ -13,6 +13,10 @@ const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const BREW_ID = /^[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}){0,2}$/
 // A Python package name, as uv tool list prints it: no version, extra or path.
 const UV_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+// A winget package id (Git.Git, Notepad++.Notepad++, a Store id like 9NBLGGH4NNS1): dot-separated parts, none
+// empty; no space, path, shell or cmd.exe character, and no … of an id winget cut short. The checker keeps a
+// copy (check_updates.py WINGET_ID), which a checker test holds to this one.
+const WINGET_ID = /^(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9_+-]*(\.[A-Za-z0-9_+-]+)*$/
 
 /**
  * The one argv an item may run, or undefined. The id comes from a command's output (a trust
@@ -24,6 +28,9 @@ export function argvFor(item: Pick<ToolItem, 'id' | 'kind' | 'cask'>): string[] 
   if (kind === 'skill' && SKILL_ID.test(id)) return ['npx', '--yes', SKILLS_CLI, 'update', '-g', id]
   if (kind === 'brew' && BREW_ID.test(id)) return ['brew', 'upgrade', ...(item.cask === true ? ['--cask'] : []), id]
   if (kind === 'uv' && UV_ID.test(id)) return ['uv', 'tool', 'upgrade', id]
+  // --exact: that id only, never a substring match. No prompt waits for an answer no one sees; a source's
+  // agreement is not accepted for you, so an unaccepted one fails the update with winget's message.
+  if (kind === 'winget' && WINGET_ID.test(id)) return ['winget', 'upgrade', '--id', id, '--exact', '--accept-package-agreements', '--disable-interactivity']
   return undefined
 }
 
@@ -126,7 +133,7 @@ export function sortItems(result: CheckResult | null, kinds: readonly string[]):
     else if (argvFor(item)) out.updatable.push(item)
     else out.problems.push({ text: `${item.name}: not a valid ${item.kind} id, not offered for update` })
   }
-  // Grouped in display order (Plugins, Skills, Homebrew, uv tools); Update all runs in this order too.
+  // Grouped in display order (Plugins, Skills, Homebrew, uv tools, winget); Update all runs in this order too.
   out.updatable.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind))
   return out
 }
@@ -225,7 +232,7 @@ export const NO_PYTHON = /xcrun: error|developer tools|No suitable Python runtim
 /**
  * The argv as the host starts it. On Windows `npx`, and `claude` when npm installed it, are .cmd shims,
  * which only cmd.exe starts (a native claude.exe starts through it too); the plugin and skill id patterns
- * admit none of cmd's special characters.
+ * admit none of cmd's special characters. winget, brew and uv are native exes and start as they are.
  * Drop cmd.exe once $.process.run starts .cmd shims itself.
  */
 export const onHost = (argv: readonly string[], isWindows: boolean): string[] =>

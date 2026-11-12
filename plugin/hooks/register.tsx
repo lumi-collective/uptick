@@ -34,8 +34,8 @@ const TITLE = 'Uptick'
 const COMMAND = 'uptick'
 const TEN_MINUTES = 600_000
 const FIFTEEN_MINUTES = 900_000
-const SCOPE: Record<string, string> = { plugin: 'plugins', skill: 'skills', brew: 'Homebrew', uv: 'uv tools' }
-const GROUP: Record<string, string> = { plugin: 'Plugins', skill: 'Skills', brew: 'Homebrew', uv: 'uv tools' }
+const SCOPE: Record<string, string> = { plugin: 'plugins', skill: 'skills', brew: 'Homebrew', uv: 'uv tools', winget: 'winget packages' }
+const GROUP: Record<string, string> = { plugin: 'Plugins', skill: 'Skills', brew: 'Homebrew', uv: 'uv tools', winget: 'winget' }
 const DAY = 86_400_000
 
 const resultA = atom({ plugin: 'uptick', key: 'result' } as const, null)
@@ -519,7 +519,7 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
 
   const groupHead = (title: string, n: number) => <Text dimColor>{`${title} (${n})`}</Text>
 
-  // Plugins, Skills, Homebrew, uv tools, Known issues, Info; the hotkeys run on across groups.
+  // Plugins, Skills, Homebrew, uv tools, winget, Known issues, Info; the hotkeys run on across groups.
   const groups = () => [
     ...kinds.flatMap(kind => {
       const group = sorted.updatable.filter(i => i.kind === kind)
@@ -869,7 +869,7 @@ async function onSessionStart($: Engine, e: Args<'session.start'>, next: Next<'s
   )
   await $.command.register({
     name: COMMAND,
-    description: `${TITLE}: show updates for Claude Code, plugins, skills, Homebrew and uv tools; run one after you confirm it`,
+    description: `${TITLE}: show updates for Claude Code, plugins, skills, Homebrew, uv tools and winget; run one after you confirm it`,
   })
   // After the command is registered, so a refused env read cannot cost /uptick; read once here, not in draw,
   // where a failing env read would break the pane. A refused read leaves the rest of the start as it is.

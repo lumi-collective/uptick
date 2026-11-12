@@ -191,6 +191,231 @@ class UvTools(unittest.TestCase):
         self.assertIn('  ↑ example-tool: 1.0 → 1.1   [uv tool upgrade example-tool]', cu.text(result))
 
 
+def table(head, rows, widths):
+    """A winget-style table of ASCII cells: each column padded to its width, a dashed line under the head."""
+    line = lambda cells: ''.join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()  # noqa: E731
+    return '\n'.join([line(head), '-' * sum(widths), *map(line, rows)])
+
+
+class Winget(unittest.TestCase):
+    # Synthetic tables (made up here, not taken from a machine) in the shape winget upgrade prints: a spinner
+    # redrawn with \r, a table, a footer, and a second table under a heading: the packages whose publisher asks
+    # winget to update them only by name (RequireExplicitUpgrade). Column widths are per table.
+    W = (24, 25, 10, 10, 8)
+    EN = ('   - \r   \\ \r' + table(('Name', 'Id', 'Version', 'Available', 'Source'), [
+        ('Example Editor', 'Example.Editor', '1.4.0', '1.5.0', 'winget'),
+        # winget cuts a long name to leave one space before the next column.
+        ('Contoso Runtime 2015 x…', 'Contoso.Runtime.2015+', '14.38.1', '14.40.2', 'winget'),
+        ('Sample Notes', '9EXAMPLE0NOTES', '2.0', '2.1', 'msstore'),
+        ('Old Viewer', 'Fabrikam.Viewer', '< 3.0', '3.1', 'winget'),
+        ('Long Named Package', 'Fabrikam.VeryLongPackag…', '3.0', '3.1', 'winget'),
+    ], W) + '\n5 upgrades available.\n\n'
+        '1 package(s) are pinned and need to be explicitly upgraded.\n'
+        + table(('Name', 'Id', 'Version', 'Available', 'Source'), [('Pinned Tool', 'Example.Pinned', '1.0', '1.1', 'winget')],
+                (12, 15, 8, 10, 6)) + '\n')
+    # German headers, a BOM and CRLF line ends; the last two headers are one space apart.
+    DE ='\ufeff' + table(('Name', 'ID', 'Version', 'Verfügbar', 'Quelle'),
+                         [('Beispiel Editor', 'Example.Editor', '1.4.0', '1.5.0', 'winget')],
+                         (17, 16, 8, 10, 6)).replace('\n', '\r\n') + '\r\n1 Aktualisierungen verfügbar.\r\n'
+    NARROW = (5, 4, 8, 10, 6)
+    HEAD = ('Name', 'Id', 'Version', 'Available', 'Source')
+    # Chinese headers and a Chinese name: winget pads by terminal cells, two for each of these characters,
+    # so the ID column starts at cell 12, which is character 10 in the head and 7 in the row.
+    ZH = ('名称        ID                版本    可用    源\n'
+          '--------------------------------------------------\n'
+          '示例编辑器  Example.Editor    1.4.0   1.5.0   winget\n')
+    NONE = 'No installed package found matching input criteria.\n'
+
+    def winget(self, out='', code=0, which=lambda t: 'C:\\Windows\\winget.exe', name='nt', raises=None, known_broken=None):
+        rep, ran = cu.Report(known_broken or {}), []
+
+        def fake(cmd, **kw):
+            ran.append((cmd, kw))
+            if raises:
+                raise raises
+            return subprocess.CompletedProcess(cmd, code, stdout=out, stderr='')
+        with mock.patch.object(cu.os, 'name', name), mock.patch.object(cu.shutil, 'which', which), \
+                mock.patch.object(cu.subprocess, 'run', fake):
+            cu.check_winget(rep)
+        return rep, ran
+
+    def test_every_row_of_both_tables_is_read_from_the_layout(self):
+        rep, ran = self.winget(self.EN)
+        self.assertEqual(ran[0][0], ['C:\\Windows\\winget.exe', 'upgrade', '--disable-interactivity'])
+        # UTF-8 whatever the code page, or the … that marks a cut id is never seen.
+        self.assertEqual((ran[0][1]['encoding'], ran[0][1]['errors']), ('utf-8', 'replace'))
+        self.assertEqual([(i['id'], i['kind'], i['name'], i['have'], i['latest']) for i in rep.items], [
+            ('Example.Editor', 'winget', 'Example Editor', '1.4.0', '1.5.0'),
+            ('Contoso.Runtime.2015+', 'winget', 'Contoso Runtime 2015 x…', '14.38.1', '14.40.2'),
+            ('9EXAMPLE0NOTES', 'winget', 'Sample Notes', '2.0', '2.1'),
+            ('Fabrikam.Viewer', 'winget', 'Old Viewer', '< 3.0', '3.1'),
+            ('Fabrikam.VeryLongPackag…', 'info', 'Long Named Package', '3.0', '3.1'),
+            ('Example.Pinned', 'info', 'Pinned Tool', '1.0', '1.1')])
+        self.assertEqual((rep.checked, rep.problems, rep.skipped), (['winget packages'], [], []))
+
+    def test_a_cut_id_is_never_offered(self):
+        cut = [i for i in self.winget(self.EN)[0].items if i['id'].endswith('…')]
+        self.assertEqual([(i['kind'], i['note']) for i in cut], [('info', 'not compared: winget cut its id short')])
+        self.assertFalse(cu.is_update(cut[0]))
+
+    EXPLICIT_NOTE = 'not compared: its publisher asks winget to update it only by name'
+
+    def test_an_explicit_upgrade_package_is_shown_never_offered(self):
+        explicit = [i for i in self.winget(self.EN)[0].items if i['id'] == 'Example.Pinned']
+        self.assertEqual([(i['kind'], i['note']) for i in explicit], [('info', self.EXPLICIT_NOTE)])
+        self.assertFalse(cu.is_update(explicit[0]))
+
+    def test_the_explicit_upgrade_table_alone_is_still_never_offered(self):
+        # With nothing else to upgrade, winget prints a blank line, the heading and only that table.
+        alone = '   - \r\n\n1 package(s) are pinned and need to be explicitly upgraded.\n' + table(
+            self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')], self.NARROW) + '\n'
+        rep, _ = self.winget(alone)
+        self.assertEqual([(i['id'], i['kind'], i['note']) for i in rep.items], [('A.B', 'info', self.EXPLICIT_NOTE)])
+        self.assertEqual(rep.problems, [])
+
+    def test_a_spinner_left_above_the_main_table_is_no_heading(self):
+        # Its last frame on a line of its own must not read as the explicit-upgrade heading: the rows stay offered.
+        spun = '   - \r   \\ \n' + table(self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')], self.NARROW) + '\n'
+        rep, _ = self.winget(spun)
+        self.assertEqual([(i['id'], i['kind']) for i in rep.items], [('A.B', 'winget')])
+
+    def test_headers_in_another_language(self):
+        rep, _ = self.winget(self.DE)
+        self.assertEqual(rep.items, [{'id': 'Example.Editor', 'kind': 'winget', 'name': 'Beispiel Editor',
+                                      'have': '1.4.0', 'latest': '1.5.0'}])
+
+    def test_multi_word_headers_are_a_problem_not_a_guess(self):
+        # Korean splits two headers in two words each: 7 starts, so the table is not read.
+        ko = table(('이름', '장치 ID', '버전', '사용 가능', '원본'), [('Tool', 'A.B', '1.0', '1.1', 'winget')], (6, 9, 6, 10, 6))
+        rep, _ = self.winget(ko)
+        self.assertEqual(rep.items, [])
+        self.assertEqual(rep.problems, [{'text': 'winget packages not checked: its table has 7 columns, not 4 or 5',
+                                         'hint': 'run winget upgrade in a terminal'}])
+
+    def test_wide_characters_fill_two_cells(self):
+        rep, _ = self.winget(self.ZH)
+        self.assertEqual([(i['id'], i['name'], i['have'], i['latest']) for i in rep.items],
+                         [('Example.Editor', '示例编辑器', '1.4.0', '1.5.0')])
+
+    def problem(self, text):
+        return [{'text': f'winget packages not checked: {text}', 'hint': 'run winget upgrade in a terminal'}]
+
+    def test_a_footer_that_does_not_line_up_is_not_a_row(self):
+        # The alignment check: "g" sits in the cell before the Id column.
+        narrow = table(self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')], self.NARROW) + '\n1 upgrade available.\n'
+        rep, _ = self.winget(narrow)
+        self.assertEqual(([i['id'] for i in rep.items], rep.problems), (['A.B'], []))
+
+    def test_a_footer_that_lines_up_has_no_version_under_available(self):
+        # The digit check: this footer has a space before every column, so only "available" tells it from a row.
+        lined_up = table(self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')], self.NARROW) + '\nxxxx yyy zzzzzzz available\n'
+        rep, _ = self.winget(lined_up)
+        self.assertEqual(([i['id'] for i in rep.items], rep.problems), (['A.B'], []))
+
+    def test_several_footer_lines_are_not_rows(self):
+        two = self.DE.replace('verfügbar.\r\n', 'verfügbar.\r\n2 Pakete haben Versionsnummern, die nicht ermittelt werden können.\r\n')
+        rep, _ = self.winget(two)
+        self.assertEqual(([i['id'] for i in rep.items], rep.problems), (['Example.Editor'], []))
+
+    def test_a_row_that_does_not_line_up_is_a_problem_not_the_end_of_the_list(self):
+        odd = table(self.HEAD, [
+            ('Tool', 'A.B', '1.0', '1.1', 'winget'), ('Toolong', 'C.D', '1.0', '1.1', 'winget'), ('Last', 'E.F', '1.0', '1.1', 'winget'),
+        ], self.NARROW)
+        rep, _ = self.winget(odd)
+        self.assertEqual((rep.items, rep.checked), ([], []))
+        self.assertEqual(rep.problems, self.problem('a row of its table does not line up with its columns'))
+
+    def test_a_header_shifted_against_its_rows_is_a_problem(self):
+        shifted = table(self.HEAD, [], self.NARROW) + '\n' + ' ' + table(self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')],
+                                                                         self.NARROW).split('\n')[-1] + '\n'
+        rep, _ = self.winget(shifted)
+        self.assertEqual((rep.items, rep.checked), ([], []))
+        self.assertEqual(rep.problems, self.problem('the first line of its table is not a row'))
+
+    def test_a_table_with_no_row_is_a_problem(self):
+        # winget prints no table without rows: one read as only a footer was misread.
+        rep, _ = self.winget(table(self.HEAD, [], self.NARROW) + '\n1 upgrade available.\n')
+        self.assertEqual(rep.problems, self.problem('the first line of its table is not a row'))
+
+    def test_an_available_version_that_starts_with_no_digit(self):
+        row = ('Tool', 'C.D', '1.0', 'v2.0', 'winget')
+        ok = ('Tool', 'A.B', '1.0', '1.1', 'winget')
+        # Alone, or in the middle: a problem row.
+        self.assertEqual(self.winget(table(self.HEAD, [row], self.NARROW))[0].problems,
+                         self.problem('the first line of its table is not a row'))
+        self.assertEqual(self.winget(table(self.HEAD, [ok, row, ok], self.NARROW))[0].problems,
+                         self.problem('a row of its table does not line up with its columns'))
+        # Last, it cannot be told from a footer: it is left out. shortcut: a live run shows whether winget prints such a version.
+        rep, _ = self.winget(table(self.HEAD, [ok, row], self.NARROW))
+        self.assertEqual(([i['id'] for i in rep.items], rep.problems), (['A.B'], []))
+
+    def test_a_carriage_return_inside_the_table_is_a_problem(self):
+        # The text after a \r would stand in for the row: only the header line may carry spinner frames.
+        evil = table(self.HEAD, [('Tool', 'A.B', '1.0', '1.1', 'winget')], self.NARROW).split('\n')
+        evil[2] = 'Evil\r' + evil[2]
+        rep, _ = self.winget('\n'.join(evil) + '\n')
+        self.assertEqual((rep.items, rep.problems), ([], self.problem('a line of its table holds a carriage return')))
+
+    def test_an_id_outside_the_plain_characters_is_a_problem_never_an_item(self):
+        for bad in ('Evil.App&calc', 'Evil&c…', '-x.y', 'a..b'):
+            rows = [('Tool', 'A.B', '1.0', '1.1', 'winget'), ('Evil', bad, '1.0', '1.1', 'winget')]
+            rep, _ = self.winget(table(self.HEAD, rows, (5, 16, 8, 10, 6)))
+            self.assertEqual([i['id'] for i in rep.items], ['A.B'], bad)
+            self.assertEqual(rep.problems, [{'text': 'Evil: not a valid winget id, not offered for update'}], bad)
+            self.assertNotIn(bad, cu.text({'checkedAt': '2026-01-01T09:00', 'skipped': [], **rep.__dict__}))
+        for good in ('Microsoft.PowerToys', 'Notepad++.Notepad++', '9EXAMPLE0NOTES', 'Example_Tool-2.x'):
+            self.assertTrue(cu.WINGET_ID.fullmatch(good), good)
+        for bad in ('a b', 'a\nb', 'a"b', 'a%b', 'a^b', 'a|b', '..\\a', 'a.', '.a', 'x' * 129, 'a\n'):
+            self.assertIsNone(cu.WINGET_ID.fullmatch(bad), repr(bad))
+
+    def test_a_table_of_an_unknown_shape_is_a_problem_not_a_guess(self):
+        odd = table(('Name', 'Id', 'Installed version', 'Available', 'Source'), [('Tool', 'A.B', '1.0', '1.1', 'winget')],
+                    (5, 4, 18, 10, 6))
+        rep, _ = self.winget(odd)
+        self.assertEqual(rep.items, [])
+        self.assertEqual(rep.problems, [{'text': 'winget packages not checked: its table has 6 columns, not 4 or 5',
+                                         'hint': 'run winget upgrade in a terminal'}])
+
+    def test_nothing_to_upgrade_is_no_items(self):
+        # winget may say so with exit 0 or with its no-packages codes.
+        for code in (0, 0x8A150014, 0x8A15002B):
+            rep, _ = self.winget(self.NONE, code=code)
+            self.assertEqual((rep.items, rep.problems, rep.checked), ([], [], ['winget packages']), code)
+
+    def test_a_failing_run_is_a_problem_with_its_last_line(self):
+        out = '   - \r   \\ \rFailed when searching source: winget\n0x8a15000f : Data required by the source is missing\n'
+        rep, _ = self.winget(out, code=0x8A15000F)
+        self.assertEqual((rep.items, rep.checked), ([], []))
+        self.assertEqual(rep.problems, [{'text': 'winget packages not checked: 0x8a15000f : Data required by the source is missing',
+                                         'hint': 'run winget upgrade in a terminal'}])
+
+    def test_a_run_that_could_not_start_or_hung_is_a_problem(self):
+        self.assertEqual(self.winget(raises=OSError('boom'))[0].problems,
+                         [{'text': 'winget packages not checked: winget could not start', 'hint': 'run winget upgrade in a terminal'}])
+        self.assertEqual(self.winget(raises=subprocess.TimeoutExpired('winget', 180))[0].problems,
+                         [{'text': 'winget packages not checked: winget gave no answer in time', 'hint': 'run winget upgrade in a terminal'}])
+
+    def test_missing_winget_on_windows_is_skipped(self):
+        rep, ran = self.winget(self.EN, which=lambda t: None)
+        self.assertEqual((rep.items, rep.problems, ran, rep.skipped), ([], [], [], ['winget not found, skipped']))
+
+    def test_elsewhere_it_is_not_even_looked_for(self):
+        def which(t):
+            raise AssertionError('looked for winget')
+        rep, ran = self.winget(self.EN, which=which, name='posix')
+        self.assertEqual((rep.items, rep.problems, ran, rep.skipped), ([], [], [], ['winget runs only on Windows, skipped']))
+
+    def test_known_broken_holds_back_a_winget_version(self):
+        rep, _ = self.winget(self.DE, known_broken={'Example.Editor': {'match': '1.5.0', 'kind': 'winget', 'note': 'breaks'}})
+        self.assertEqual([i['kind'] for i in rep.items], ['broken'])
+
+    def test_text_names_the_upgrade_command(self):
+        result = {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [],
+                  'items': [{'id': 'Example.Editor', 'kind': 'winget', 'name': 'Example Editor', 'have': '1.4.0', 'latest': '1.5.0'}]}
+        self.assertIn('  ↑ Example Editor: 1.4.0 → 1.5.0   [winget upgrade --id Example.Editor --exact'
+                      ' --accept-package-agreements --disable-interactivity]', cu.text(result))
+
+
 class KnownBroken(unittest.TestCase):
     def setUp(self):
         self.rep = cu.Report(cu.load_known_broken(os.path.join(DATA, 'known-broken.json')))
@@ -515,13 +740,17 @@ class Kinds(unittest.TestCase):
         ran = []
         with mock.patch.multiple(cu, check_claude=lambda r: ran.append('claude'), check_plugins=lambda r, f: ran.append('plugin'),
                                  check_skills=lambda r: ran.append('skill'), check_brew=lambda r, f, b: ran.append('brew'),
-                                 check_uv=lambda r: ran.append('uv')):
+                                 check_uv=lambda r: ran.append('uv'), check_winget=lambda r: ran.append('winget')):
             cu.check(kinds={'skill'})
             self.assertEqual(ran, ['claude', 'skill'])
             ran.clear()
             cu.check(kinds={'uv'})
             self.assertEqual(ran, ['claude', 'uv'])
             ran.clear()
+            cu.check(kinds={'winget'})
+            self.assertEqual(ran, ['claude', 'winget'])
+            ran.clear()
+            # winget, like vulns, runs only when named: a test or a caller that names no kinds never starts it.
             cu.check()
             self.assertEqual(ran, ['claude', 'plugin', 'skill', 'brew', 'uv'])
 
@@ -538,8 +767,9 @@ class Kinds(unittest.TestCase):
             cu.main(['--kinds='])
             cu.main([])
             cu.main(['--kinds=uv'])
-        # uv is opt-in: without --kinds it is not checked, so no tool names go to the index unasked.
-        self.assertEqual(seen, [{'plugin', 'brew'}, set(), {'plugin', 'skill', 'brew'}, {'uv'}])
+            cu.main(['--kinds=winget,plugin'])
+        # uv and winget are opt-in: without --kinds neither is checked, so nothing goes to their sources unasked.
+        self.assertEqual(seen, [{'plugin', 'brew'}, set(), {'plugin', 'skill', 'brew'}, {'uv'}, {'winget', 'plugin'}])
 
     def test_unknown_kind_is_reported(self):
         seen = []
@@ -555,7 +785,7 @@ class Kinds(unittest.TestCase):
         problems = json.loads(out.getvalue())['problems']
         self.assertEqual(len(problems), 1)
         # The exact text also proves the empty entry between the two commas is not reported.
-        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew, uv, vulns)')
+        self.assertEqual(problems[0]['text'], 'kinds: ignored unknown "skill;", "x" (valid: plugin, skill, brew, uv, winget, vulns)')
         self.assertEqual(problems[0]['hint'], 'fix kinds in /config, UPTICK_KINDS or --kinds')
         self.assertEqual(code, 2)
 
@@ -1201,6 +1431,11 @@ class InSync(unittest.TestCase):
     def test_one_skills_cli_pin(self):
         logic = self.read('plugin', 'hooks', 'logic.ts')
         self.assertEqual(re.search(r"SKILLS_CLI = '([^']+)'", logic).group(1), cu.SKILLS_CLI)
+
+    def test_one_winget_id_pattern(self):
+        # The checker's copy is the mod's, character for character, so it is never looser.
+        logic = self.read('plugin', 'hooks', 'logic.ts')
+        self.assertEqual(re.search(r'const WINGET_ID = /(.+)/\n', logic).group(1), cu.WINGET_ID.pattern)
 
 
 if __name__ == '__main__':

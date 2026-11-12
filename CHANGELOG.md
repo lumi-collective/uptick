@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- On Windows, a `winget` kind, off by default: add `winget` to `kinds`. The check runs
+  `winget upgrade --disable-interactivity` and reads its table by its layout, one header word per column; a
+  header it cannot split (Korean, for one) is a problem row. A confirmed update runs
+  `winget upgrade --id <id> --exact --accept-package-agreements --disable-interactivity`, without `cmd.exe`. A
+  package whose publisher asks winget to update it only by name, or one whose id winget cut short, is shown as
+  `not compared`, never offered. On other systems
+  `winget` in `kinds` is one skipped line.
+
 ## 0.4.0
 
 - The confirm step for one item has **Skip**, with no hotkey: it adds that version to your known-broken list, so

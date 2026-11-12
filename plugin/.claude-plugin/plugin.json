@@ -2,7 +2,7 @@
   "name": "uptick",
   "displayName": "Uptick",
   "version": "0.4.0",
-  "description": "Lists updates for Claude Code, plugins, skills-CLI skills, Homebrew and uv tools in a pane, and runs one only after you confirm it.",
+  "description": "Lists updates for Claude Code, plugins, skills-CLI skills, Homebrew, uv tools and winget packages in a pane, and runs one only after you confirm it.",
   "author": { "name": "trustmeimlumi", "url": "https://github.com/trustmeimlumi" },
   "homepage": "https://github.com/lumi-collective/uptick",
   "repository": "https://github.com/lumi-collective/uptick",
@@ -31,7 +31,7 @@
     "kinds": {
       "type": "string",
       "title": "Kinds",
-      "description": "Comma list of the kinds to show and update: plugin, skill, brew, uv. Add uv to check uv tools; their names then go to PyPI (or your uv index) on every check. Add vulns to mark updates that replace a vulnerable version (brew vulns; osv-scanner for npm, Appium and plugins); package names and versions then go to api.osv.dev once a day (an hour after a failed scan).",
+      "description": "Comma list of the kinds to show and update: plugin, skill, brew, uv, winget. Add uv to check uv tools; their names then go to PyPI (or your uv index) on every check. Add winget, on Windows, to check winget packages; winget upgrade then asks your winget sources (by default the winget community repository and the Microsoft Store) on every check; what winget sends them is not checked by Uptick. Add vulns to mark updates that replace a vulnerable version (brew vulns; osv-scanner for npm, Appium and plugins); package names and versions then go to api.osv.dev once a day (an hour after a failed scan).",
       "default": "plugin,skill,brew"
     },
     "hint": {

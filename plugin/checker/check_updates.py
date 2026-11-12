@@ -3,7 +3,8 @@
 
 Checks Claude Code (vs the npm registry's latest), installed Claude Code plugins (vs the version
 their marketplace advertises), skills-CLI skills (~/.agents/.skill-lock.json tree hash vs GitHub,
-through gh), Homebrew and uv tools (uv tool list --outdated, which asks the package index).
+through gh), Homebrew, uv tools (uv tool list --outdated, which asks the package index) and, on Windows,
+winget packages (winget upgrade, which asks winget's sources).
 A check whose tool or file is absent is skipped. With vulns in --kinds it also scans Homebrew, global npm,
 Appium and the plugins (brew vulns, osv-scanner; online, at most once a day each), and the repositories
 listed in ~/.config/uptick/scan-repos.json, into ~/.cache/uptick/vulns.json.
@@ -19,7 +20,8 @@ Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
                        `exact` (optional) holds back that version only, not one that starts with it
                        (default: ~/.config/uptick/known-broken.json, when it exists)
   --extra COMMAND      run COMMAND (split like a shell, run without one) and merge the JSON it prints
-  --kinds LIST         comma list of plugin, skill, brew, uv, vulns: check only these (default: plugin, skill, brew)
+  --kinds LIST         comma list of plugin, skill, brew, uv, winget, vulns: check only these
+                       (default: plugin, skill, brew)
   --vulns-now          with vulns: rescan every target now, whatever the age of its last scan
 Exit code: 0 = all current, 1 = updates available, 2 = only problems. Known-broken notes,
 `not compared` items and self-updating tools are not updates.
@@ -35,13 +37,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import quote
 
 HOME = os.path.expanduser('~')
-KINDS = ('plugin', 'skill', 'brew', 'uv', 'vulns')
-# uv is opt-in: its check sends the name of every uv tool to the package index.
+KINDS = ('plugin', 'skill', 'brew', 'uv', 'winget', 'vulns')
+# uv and winget are opt-in: their checks ask the package index or winget's sources on every run.
 DEFAULT_KINDS = ('plugin', 'skill', 'brew')
 # The skills CLI the mod runs, pinned (hooks/logic.ts SKILLS_CLI).
 SKILLS_CLI = 'skills@1.7.4'
@@ -51,6 +54,7 @@ HOW = {
     'skill': 'npx --yes ' + SKILLS_CLI + ' update -g {id}',
     'brew': 'brew upgrade {id}',
     'uv': 'uv tool upgrade {id}',
+    'winget': 'winget upgrade --id {id} --exact --accept-package-agreements --disable-interactivity',
 }
 EXTRA_HINT = 'check uptick.checkCommand in /config'
 # The note of a plugin that could not be compared: shown, never counted as an update.
@@ -464,6 +468,118 @@ def check_uv(rep):
         else:
             rep.offer({'id': name, 'kind': 'uv', 'name': name, 'have': have, 'latest': latest}, latest)
     rep.checked.append('uv tools')
+
+
+def cells(line):
+    """(first terminal cell, character) for each character: winget pads its columns by cells, and an East Asian
+    wide character fills two."""
+    out, col = [], 0
+    for ch in line:
+        out.append((col, ch))
+        col += 2 if unicodedata.east_asian_width(ch) in 'WF' else 1
+    return out
+
+
+def parse_winget(output):
+    """(name, id, have, latest, explicit) of each row of winget upgrade's tables; explicit marks the table of
+    packages whose publisher asks winget to update them only by name (RequireExplicitUpgrade). The headers are in the display language, so the columns are where the header words start
+    above the dashed line, never what the words say: one word per header. ValueError for a table it cannot read."""
+    lines = [line.rstrip('\r').rstrip() for line in output.lstrip('\N{BYTE ORDER MARK}').split('\n')]
+    rows, tables = [], 0
+    for i, line in enumerate(lines):
+        if i == 0 or not re.fullmatch(r'-{10,}', line):
+            continue
+        tables += 1
+        # The explicit-upgrade table comes after the main one, or alone under its heading when nothing else needs an
+        # upgrade. Any text just above a header marks it so: a warning above the main table then keeps its rows
+        # from being offered too, the safe way to be wrong. A spinner's last frame left on its line is no text.
+        explicit = tables > 1 or (i >= 2 and bool(re.sub(r'[-\\|/ ]', '', lines[i - 2].split('\r')[-1])))
+        # A spinner redraws with \r before the header: keep what that line ends as.
+        head = cells(lines[i - 1].split('\r')[-1])
+        starts = [c for n, (c, ch) in enumerate(head) if ch != ' ' and (n == 0 or head[n - 1][1] == ' ')]
+        # Name, Id, Version, Available and, with more than one source, Source.
+        if len(starts) not in (4, 5):
+            raise ValueError(f'its table has {len(starts)} columns, not 4 or 5')
+        block = []
+        for row in lines[i + 1:]:  # a blank line ends the table
+            if not row.strip():
+                break
+            if '\r' in row:  # the text after it would stand in for the row
+                raise ValueError('a line of its table holds a carriage return')
+            block.append(row)
+        footer = False
+        for n, row in enumerate(block):
+            row_cells = cells(row)
+            cols = [''] * len(starts)
+            for c, ch in row_cells:
+                cols[max(sum(1 for s in starts if s <= c) - 1, 0)] += ch
+            name, pkg_id, have, latest = (x.strip() for x in cols[:4])
+            # A row has a space in the cell before each column, and its available version starts with a digit.
+            if not (pkg_id and have and latest[:1].isdigit()) or any(ch != ' ' and c + 1 in starts[1:] for c, ch in row_cells):
+                # winget prints no table without rows: a first line that is none means the columns were misread.
+                if n == 0:
+                    raise ValueError('the first line of its table is not a row')
+                footer = True  # the lines under the rows: a count, a note on unknown versions or pins
+            elif footer:  # a row after a line that is none: the columns were misread
+                raise ValueError('a row of its table does not line up with its columns')
+            else:
+                rows.append((name, pkg_id, have, latest, explicit))
+        if not block:
+            raise ValueError('the first line of its table is not a row')
+    return rows
+
+
+# Exit codes that mean nothing to upgrade: winget's NO_APPLICATIONS_FOUND and UPDATE_NOT_APPLICABLE.
+WINGET_NOTHING = (0, 0x8A150014, 0x8A15002B)
+# A winget id the mod may run (hooks/logic.ts WINGET_ID, kept the same by a test): no space, path, shell or cmd.exe
+# character, so the text report's command line for an id winget printed is safe to paste (a checkCommand item
+# is not checked here).
+WINGET_ID = re.compile(r'^(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9_+-]*(\.[A-Za-z0-9_+-]+)*$')
+
+
+def check_winget(rep):
+    if os.name != 'nt':  # a winget elsewhere is not Microsoft's: the check never runs it
+        rep.skipped.append('winget runs only on Windows, skipped')
+        return
+    exe = shutil.which('winget')
+    if not exe:
+        rep.skipped.append('winget not found, skipped')
+        return
+    hint = 'run winget upgrade in a terminal'
+    timeout = time_left(180)
+    if timeout < 1:
+        return
+    try:
+        # The check accepts no agreement for you. UTF-8, or the … of a cut id is lost.
+        r = subprocess.run([exe, 'upgrade', '--disable-interactivity'], capture_output=True, text=True,
+                           encoding='utf-8', errors='replace', timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if not out_of_time():
+            rep.problem('winget packages not checked: winget gave no answer in time', hint)
+        return
+    except OSError:
+        rep.problem('winget packages not checked: winget could not start', hint)
+        return
+    try:
+        rows = parse_winget(r.stdout)
+    except ValueError as err:
+        rep.problem(f'winget packages not checked: {err}', hint)
+        return
+    if not rows and r.returncode not in WINGET_NOTHING:
+        last = [line.split('\r')[-1].strip() for line in f'{r.stdout}\n{r.stderr}'.splitlines()]
+        rep.problem(f"winget packages not checked: {([x for x in last if x] or [f'exit {r.returncode}'])[-1][:200]}", hint)
+        return
+    for name, pkg_id, have, latest, explicit in rows:
+        cut = pkg_id.endswith('…')  # winget cut it to fit: the id that would run is not the package's
+        if not WINGET_ID.fullmatch(pkg_id[:-1] if cut else pkg_id):
+            rep.problem(f'{name or "a winget package"}: not a valid winget id, not offered for update')
+        elif cut or explicit:
+            note = 'winget cut its id short' if cut else 'its publisher asks winget to update it only by name'
+            rep.items.append({'id': pkg_id, 'kind': 'info', 'name': name or pkg_id, 'have': have, 'latest': latest,
+                              'note': f'{NOT_COMPARED}: {note}'})
+        else:
+            rep.offer({'id': pkg_id, 'kind': 'winget', 'name': name or pkg_id, 'have': have, 'latest': latest}, latest)
+    rep.checked.append('winget packages')
 
 
 # ---- vulnerability scans: opt-in, `vulns` in kinds ----
@@ -929,7 +1045,7 @@ def merge_extra(rep, command):
 
 
 def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None, vulns_now=False):
-    """kinds: the set of KINDS to check, None for all but vulns, which is only ever named; Claude Code and
+    """kinds: the set of KINDS to check, None for all but winget and vulns, which are only ever named; Claude Code and
     the extra check always run. vulns_now: rescan every target, whatever the cache's age."""
     global DEADLINE
     try:
@@ -943,6 +1059,7 @@ def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None,
         ('skill', 'skills', lambda: check_skills(rep)),
         ('brew', 'Homebrew', lambda: check_brew(rep, fetch, brewfile)),
         ('uv', 'uv tools', lambda: check_uv(rep)),
+        ('winget', 'winget packages', lambda: check_winget(rep)),
         (None, 'extra check', lambda: merge_extra(rep, extra) if extra else None),
     ]
     DEADLINE = time.monotonic() + TOTAL_SECONDS
@@ -951,7 +1068,7 @@ def check(fetch=False, brewfile=None, known_broken=None, extra=None, kinds=None,
             # The scans run beside the other checks; their own cache keeps them to once a day per target.
             scans = pool.submit(scan_vulns, vulns_now) if kinds is not None and 'vulns' in kinds else None
             for kind, name, run_check in checks:
-                if kind and kinds is not None and kind not in kinds:
+                if kind and (kind not in kinds if kinds is not None else kind == 'winget'):  # winget: only when named
                     continue
                 try:
                     run_check()

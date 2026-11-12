@@ -48,8 +48,8 @@ upstream moves past it.
 
 A skill's `match` is the start of its upstream tree hash. A version's `match` is the version, or its
 start up to a non-digit: `1.1` holds back `1.1` and `1.1.3`, not `1.10.0`. With `"exact": true` a version's
-`match` holds back that version only. `kind` (`plugin`, `skill`, `brew`, `uv`) is optional and limits the entry to
-that kind.
+`match` holds back that version only. `kind` (`plugin`, `skill`, `brew`, `uv`, `winget`) is optional and limits the
+entry to that kind.
 
 **Skip**, in the confirm step for one item, adds an entry for you: the latest version as `match`, the item's
 `kind`, `"exact": true`, `"note": "skipped in the Uptick pane"` and today's date as `since`. So it holds back that
@@ -154,8 +154,28 @@ left out is named in one problem row, and the result and the cache still come ou
 
 ## Limits and not supported
 
-- Package managers other than Homebrew and uv tools: winget, scoop, choco, apt, pacman, nix and pip. Add them
+- Package managers other than Homebrew, uv tools and winget: scoop, choco, apt, pacman, nix and pip. Add them
   with `checkCommand`.
+- winget is checked only on Windows; elsewhere `winget` in `kinds` is one skipped line, and the check never runs a
+  `winget` found on the PATH. winget prints a table, not JSON, with headers in the Windows display language. The
+  check reads this layout: a header line of one word per column (Name, Id, Version, Available and, with more
+  than one source, Source), a dashed line under it, then rows padded to the columns, counting an East Asian wide
+  character as two cells. A header it cannot split into four or five words (Korean has two-word headers), a
+  first line that is not a row, a row after the footer, a line with a carriage return, or an id with a
+  character outside letters, digits, `.`, `_`, `+` and `-` is a problem row, never a guess. A last row whose
+  Available version does not start with a digit cannot be told from the footer and is left out.
+- winget's explicit-targeting table holds the packages whose publisher asks winget to update them only by name
+  (RequireExplicitUpgrade): each is shown under Info as `not compared: its publisher asks winget to update it
+  only by name`, never offered and never in Update all. A table after the first, or one with text just above its
+  header (the table alone, under its heading), counts as that table; a warning above the main table makes its
+  rows Info too. Packages you pinned with `winget pin add` are left out, as winget leaves them out without
+  `--include-pinned`. A package whose
+  id winget cut short (it ends in `…`) is shown as `not compared` too. A package whose installed version winget
+  cannot tell is left out (no `--include-unknown`).
+- The winget update accepts the package's agreement (`--accept-package-agreements`), not a source's: a source
+  whose agreement you have not accepted in winget fails the update with winget's message. It runs with
+  winget's default installer mode, which shows the installer's progress; an installer that asks for
+  administrator rights still shows the Windows prompt.
 - Pinned Homebrew packages are left out.
 - A uv tool installed from git, a URL or a folder, or with an exact pin (`name==1.0`), is shown under Info
   as `not compared`, never offered: `uv tool upgrade` keeps its source or pin. Reinstall it with
@@ -173,8 +193,8 @@ left out is named in one problem row, and the result and the cache still come ou
   update those. A scan waits for its lockfile search, which stops at 20000 folders (`node_modules` and
   `.git` aside) and then fails that target; the update list waits for the scans, within the check's time
   limit. A row narrower than 40 columns shows no count.
-- An entry in `kinds` that is not `plugin`, `skill`, `brew`, `uv` or `vulns` (a typo such as `skill;`) is
-  ignored, so the group you meant is not checked. The result shows a problem row that names the entry.
+- An entry in `kinds` that is not `plugin`, `skill`, `brew`, `uv`, `winget` or `vulns` (a typo such as `skill;`)
+  is ignored, so the group you meant is not checked. The result shows a problem row that names the entry.
 - Plugins are listed as Claude Code sees them in the folder the check runs from (from the pane: your home
   folder), so a plugin installed only in another project's scope is not listed unless your user settings turn
   it on. When a plugin has several installs, the one compared is the one `claude plugin update` updates from

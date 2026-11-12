@@ -41,6 +41,7 @@ const UPDATE_PREFIXES = [
   ['npx', '--yes', SKILLS_CLI, 'update'],
   ['brew', 'upgrade'],
   ['uv', 'tool', 'upgrade'],
+  ['winget', 'upgrade'],
 ]
 // Windows starts npx through cmd.exe: the update is what follows it.
 const isUpdate = (argv: readonly string[]) => {
@@ -1130,6 +1131,105 @@ test('a uv upgrade with Nothing to upgrade and no pin hint is a tick', WITH_UV, 
   expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 1 updated/)
   expect(await ui.find({ type: 'Text', text: /✓ example-tool/ })).toBeDefined()
   await ui.unmount()
+})
+
+// No --accept-source-agreements: a source's terms are yours to accept in winget, not Uptick's.
+const WINGET_ARGV = (id: string) => ['winget', 'upgrade', '--id', id, '--exact', '--accept-package-agreements', '--disable-interactivity']
+
+test('a winget id is checked before it reaches argv', async () => {
+  for (const id of ['Microsoft.PowerToys', 'Git.Git', '7zip.7zip', 'Mozilla.Firefox.ESR', 'Notepad++.Notepad++', 'Contoso.Runtime.2015+', '9EXAMPLE0NOTES', 'Example_Tool-2.x'])
+    expect(argvFor({ id, kind: 'winget' }), id).toEqual(WINGET_ARGV(id))
+  // No leading dash, no cmd.exe, shell or path characters, no space, no cut id, no empty segment.
+  for (const id of ['--force', '-h', 'a&b', 'a|b', 'a^b', 'a%PATH%', 'a"b', 'a b', '..\\a', 'a\\..\\b', 'a/b', 'a\nb', 'Example.Long…', 'a..b', '.a', 'a.', 'a;b', 'a<b', 'a>b', 'a(b)', 'a!b', "a'b", 'a=b', 'a,b', '', 'x'.repeat(129)])
+    expect(argvFor({ id, kind: 'winget' }), JSON.stringify(id)).toBeUndefined()
+  // winget is a native exe: no cmd.exe before it.
+  expect(onHost(WINGET_ARGV('Git.Git'), true)).toEqual(WINGET_ARGV('Git.Git'))
+})
+
+const WINGET = {
+  ...RESULT,
+  items: [...RESULT.items, { id: 'Example.Editor', kind: 'winget', name: 'Example Editor', have: '1.4.0', latest: '1.5.0' }],
+}
+
+/** Opens the pane on the WINGET result, picks the package and confirms it. */
+async function updateWingetPackage($: Engine, on: On, options: Parameters<typeof world>[1] = {}) {
+  const { clock, w } = world(on, { cache: WINGET, checker: JSON.stringify(WINGET), ...options })
+  await start($)
+  await runCommand($)
+  await clock.settle()
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  await ui.press({ key: 'item:winget:Example.Editor' })
+  const runs = await ui.find({ type: 'Text', text: /runs/ })
+  await clock.advance(1000)
+  // Nothing ran on its own up to the confirm.
+  expect(w.updates()).toEqual([])
+  w.allowUpdates = true
+  await ui.press({ key: 'confirm' })
+  await clock.settle() // the check that follows a run
+  return { ui, w, runs }
+}
+
+// winget is opt-in, as uv is.
+const WITH_WINGET = { options: { kinds: 'plugin,skill,brew,uv,winget' } }
+
+test('by default winget packages are not checked or shown', async ($, on) => {
+  const { clock, w } = world(on, { cache: WINGET, checker: JSON.stringify(WINGET) })
+  await start($)
+  await runCommand($)
+  await clock.settle()
+  expect(w.ran[0]?.at(-1)).toBe('--kinds=plugin,skill,brew')
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  expect(await ui.find({ key: 'item:winget:Example.Editor' })).toBeUndefined()
+  expect((await ui.find({ key: 'update-all' }))?.props.label).toBe('Update all (3)')
+  await ui.unmount()
+})
+
+test('a winget package is its own group, last, and its row names the package', WITH_WINGET, async ($, on) => {
+  const { clock } = world(on, { cache: WINGET, checker: JSON.stringify(WINGET) })
+  await start($)
+  await clock.settle() // the session start's check: left running, it fails the file's end on a slower host
+  const ui = await $.ui.mount({ ...pane(68), surface: 'terminal' })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts.indexOf('winget (1)')).toBeGreaterThan(texts.indexOf('Homebrew (1)'))
+  expect((await ui.find({ key: 'item:winget:Example.Editor' }))?.text).toMatch(/^Example Editor +1\.4\.0 → 1\.5\.0$/)
+  expect((await ui.find({ key: 'update-all' }))?.props.label).toBe('Update all (4)')
+  await ui.unmount()
+  const row = await $.ui.mount({ ...band(), surface: 'terminal' })
+  expect((await row.find({ type: 'Text', text: /tool updates/ }))?.text).toContain('winget 1')
+  await row.unmount()
+  expect(report(parseResult(JSON.stringify(WINGET)), parseKinds('plugin,skill,brew,winget'), false, NOW, true)).toContain(
+    `  ↑ Example Editor 1.4.0 → 1.5.0\n      ${WINGET_ARGV('Example.Editor').join(' ')}`,
+  )
+  expect(sortItems(parseResult(JSON.stringify(WINGET)), parseKinds('plugin,skill,brew')).updatable.map(i => i.kind)).not.toContain('winget')
+})
+
+test('a confirmed winget package runs winget upgrade --id <id> --exact, unattended, after the confirm step showed it', WITH_WINGET, async ($, on) => {
+  const { ui, w, runs } = await updateWingetPackage($, on)
+  expect(runs?.text).toBe(`  runs   ${WINGET_ARGV('Example.Editor').join(' ')}`)
+  // Longer than the 64-column pane: it wraps, so the id is never cut off.
+  expect(runs?.props.wrap).toBe('wrap')
+  expect(w.updates()).toEqual([WINGET_ARGV('Example.Editor')])
+  const at = w.ran.findIndex(isUpdate)
+  expect(w.cwds[at]).toBe(HOME)
+  expect(w.inits[at]?.stdin).toBe('')
+  expect(w.inits[at]?.env).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Done/ }))?.text).toMatch(/^Done · 1 updated/)
+  await ui.unmount()
+})
+
+test('Windows: winget is a native exe, so its upgrade runs and shows without cmd.exe', WITH_WINGET, async ($, on) => {
+  const { ui, w, runs } = await updateWingetPackage($, on, { env: { USERPROFILE: WIN_HOME, OS: 'Windows_NT' } })
+  expect(runs?.text).toBe(`  runs   ${WINGET_ARGV('Example.Editor').join(' ')}`)
+  expect(w.updates()).toEqual([WINGET_ARGV('Example.Editor')])
+  expect(w.cwds[w.ran.findIndex(isUpdate)]).toBe(WIN_HOME)
+  await ui.unmount()
+})
+
+test('a winget row with an id the pattern refuses is a problem, not an update', WITH_WINGET, async () => {
+  const bad = { ...RESULT, items: [{ id: 'Example.Long…', kind: 'winget', name: 'Example Long', have: '1', latest: '2' }] }
+  const sorted = sortItems(parseResult(JSON.stringify(bad)), parseKinds('winget'))
+  expect(sorted.updatable).toEqual([])
+  expect(sorted.problems.at(-1)?.text).toBe('Example Long: not a valid winget id, not offered for update')
 })
 
 test('while a check runs, the confirm step offers no Update: no two brew processes at once', async ($, on) => {
