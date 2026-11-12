@@ -1,0 +1,3 @@
+{ "name": "community", "plugins": [{ "name": "lint-helper", "version": "1.5.0" },
+  { "name": "repo-helper", "source": { "source": "github", "repo": "example/repo-helper" } },
+  { "name": "sub-helper", "source": { "source": "git-subdir", "url": "https://github.com/example/mods.git", "path": "plugins/sub-helper" } }] }

@@ -1,0 +1,7 @@
+# A user unit: replace __UPTICK__ with the clone's path; extras/README.md has the commands.
+[Unit]
+Description=Uptick: check Claude Code, plugins, skills and Homebrew for updates (installs nothing)
+
+[Service]
+Type=oneshot
+ExecStart=__UPTICK__/plugin/bin/uptick-check

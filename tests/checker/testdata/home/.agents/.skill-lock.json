@@ -1,0 +1,19 @@
+{
+  "version": 3,
+  "skills": {
+    "pinned-skill": {
+      "source": "example/skills",
+      "sourceType": "github",
+      "ref": "abc1234",
+      "skillPath": "skills/pinned-skill/SKILL.md",
+      "skillFolderHash": "1111111111111111111111111111111111111111"
+    },
+    "free-skill": {
+      "source": "example/skills",
+      "sourceType": "github",
+      "skillPath": "skills/free-skill/SKILL.md",
+      "skillFolderHash": "2222222222222222222222222222222222222222"
+    },
+    "local-skill": "not an entry"
+  }
+}

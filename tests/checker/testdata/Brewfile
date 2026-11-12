@@ -1,0 +1,6 @@
+tap "example/tools"
+brew "gh"
+brew "git-delta"  # a comment after the entry
+cask "example-app"
+brew "example/tools/widget"
+mas "Some App", id: 123

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Uptick check every day
+
+[Timer]
+OnCalendar=*-*-* 09:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

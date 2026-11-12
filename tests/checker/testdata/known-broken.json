@@ -1,0 +1,5 @@
+{
+  "example-skill": { "match": "0000000", "note": "SKILL.md has invalid YAML front matter", "since": "2026-01-01" },
+  "lint-helper@community": { "match": "2.0.0", "note": "crashes on start" },
+  "example-tool": { "match": "1.1", "kind": "brew", "note": "breaks the shell completion" }
+}

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Runs the Uptick checker from this plugin folder with --fetch and --cache, so the mod and anything else that
+# reads the cache start from a fresh result. Prints the report; installs nothing.
+#
+# Options: the ones the mod has in /config, as environment variables, set in the environment or in
+# ${XDG_CONFIG_HOME:-~/.config}/uptick/check.env (KEY=value lines read as shell, a value with a space
+# in quotes; they win):
+#   UPTICK_BREWFILE, UPTICK_KNOWN_BROKEN, UPTICK_CHECK_COMMAND, UPTICK_KINDS
+#   UPTICK_PATH: folders put before PATH (default: ~/.local/bin and the usual Homebrew folders)
+# Flags: --no-fetch (a quick check), --no-notify (no notification on Linux).
+# Exits 0; the report says what was found. On Linux, notify-send says when something needs a look.
+set -u
+
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)  # the plugin folder
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/uptick/check.env"
+if [ -f "$conf" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$conf"
+  set +a
+fi
+# A scheduler starts this with a bare PATH: add where claude, brew, npm and uv usually live.
+export PATH="${UPTICK_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin}:$PATH"
+
+fetch=1
+notify=1
+for arg in "$@"; do
+  case $arg in
+    --no-fetch) fetch=0 ;;
+    --no-notify) notify=0 ;;
+    *) echo "uptick-check: unknown flag: $arg" >&2; exit 2 ;;
+  esac
+done
+
+args=(--cache)
+[ "$fetch" = 1 ] && args+=(--fetch)
+[ -n "${UPTICK_BREWFILE:-}" ] && args+=("--brewfile=$UPTICK_BREWFILE")
+[ -n "${UPTICK_KNOWN_BROKEN:-}" ] && args+=("--known-broken=$UPTICK_KNOWN_BROKEN")
+[ -n "${UPTICK_CHECK_COMMAND:-}" ] && args+=("--extra=$UPTICK_CHECK_COMMAND")
+[ -n "${UPTICK_KINDS:-}" ] && args+=("--kinds=$UPTICK_KINDS")
+
+out=$(python3 -I -X utf8 "$root/checker/check_updates.py" "${args[@]}" 2>&1)
+rc=$?
+printf '%s\n%s\n\n' "$(date '+%F %T')" "$out"
+
+if [ "$rc" -ne 0 ] && [ "$notify" = 1 ]; then
+  n=$(printf '%s\n' "$out" | grep -c '^  [↑?]')
+  # No item rows with a non-zero exit: the checker itself failed (a traceback, a bad flag).
+  if [ "$n" -gt 0 ]; then msg="$n item(s) to look at: /uptick in Claude Code"; else msg="the check failed (exit $rc)"; fi
+  # None on macOS: an osascript notification belongs to Script Editor, and a click on it opens an empty one.
+  if [ "$(uname)" != Darwin ] && command -v notify-send >/dev/null; then
+    notify-send Uptick "$msg"
+  fi
+fi
+exit 0

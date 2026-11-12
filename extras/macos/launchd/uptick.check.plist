@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs the Uptick check every day at 09:00. Replace __UPTICK__ (the clone) and __LOG__ (a log file);
+     extras/README.md has the commands. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>uptick.check</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__UPTICK__/plugin/bin/uptick-check</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>9</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>__LOG__</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG__</string>
+</dict>
+</plist>
