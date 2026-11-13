@@ -1,2 +1,4 @@
 __pycache__/
 .DS_Store
+# Claude Code writes it when it loads the plugin with --plugin-dir.
+/plugin/tsconfig.json
