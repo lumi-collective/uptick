@@ -1108,6 +1108,74 @@ class SilentSkips(unittest.TestCase):
         self.assertEqual(rep.problems, [{'text': '2 skills not checked: gh got no answer from GitHub (signed out, or offline)',
                                          'hint': 'run gh auth login'}])
 
+    def test_skills_from_other_sources_are_one_not_compared_line(self):
+        github = {'gh-skill': {'source': 'example/skills', 'sourceType': 'github', 'skillPath': 'skills/gh-skill/SKILL.md',
+                               'skillFolderHash': '1' * 40}}
+        others = {'local-skill': {'sourceType': 'local'}, 'git-skill': {'sourceType': 'git'}}
+        for skills, skipped in (({**github, **others}, ['2 skills not from GitHub: not compared']),
+                                (others, ['2 skills not from GitHub: not compared']), (github, [])):
+            with tempfile.TemporaryDirectory() as home:
+                os.makedirs(os.path.join(home, '.agents'))
+                with open(os.path.join(home, '.agents', '.skill-lock.json'), 'w') as f:
+                    json.dump({'skills': skills}, f)
+                rep = cu.Report({})
+                with mock.patch.object(cu, 'HOME', home), mock.patch.object(cu.shutil, 'which', lambda t: '/bin/' + t), \
+                        mock.patch.object(cu, 'run', lambda cmd, timeout=120: json.dumps({'gh-skill': '1' * 40})):
+                    cu.check_skills(rep)
+            self.assertEqual((rep.items, rep.problems, rep.skipped), ([], [], skipped), sorted(skills))
+
+    def test_a_marketplace_that_did_not_refresh_is_a_problem(self):
+        # Its plugins are compared with the copy from its last refresh: an old copy must not pass for a current one.
+        answers = {'alpha': None, 'beta': '', 'gamma': None}  # beta refreshed and printed nothing
+        asked = []
+
+        def fake(cmd, timeout=120):
+            if cmd[2:4] == ['marketplace', 'update']:
+                asked.append(cmd[4])
+                return answers[cmd[4]]
+            return '[]'
+
+        with tempfile.TemporaryDirectory() as home:
+            plugins = os.path.join(home, '.claude', 'plugins')
+            for m in [*answers, 'removed']:  # removed: a folder Claude Code no longer lists
+                os.makedirs(os.path.join(plugins, 'marketplaces', m))
+            open(os.path.join(plugins, 'marketplaces', '.DS_Store'), 'w').close()
+            with open(os.path.join(plugins, 'known_marketplaces.json'), 'w') as f:
+                json.dump({m: {} for m in answers}, f)
+            for fetch, problems in ((True, [{'text': 'marketplaces not refreshed: alpha, gamma (their plugin rows may be out of date)',
+                                             'hint': 'run claude plugin marketplace update <name> to see why'}]), (False, [])):
+                rep = cu.Report({})
+                with mock.patch.object(cu, 'HOME', home), mock.patch.object(cu.shutil, 'which', lambda t: '/bin/' + t), \
+                        mock.patch.object(cu, 'run', fake):
+                    cu.check_plugins(rep, fetch)
+                self.assertEqual(rep.problems, problems, fetch)
+        self.assertEqual(asked, ['alpha', 'beta', 'gamma'], 'only a marketplace Claude Code lists is refreshed')
+
+    def test_a_brew_update_that_failed_is_a_problem(self):
+        for update, problems in ((None, [{'text': 'Homebrew not refreshed: brew update failed or timed out (its rows may be out of date)',
+                                          'hint': 'run brew update to see why'}]), ('', [])):
+            rep = cu.Report({})
+            with mock.patch.object(cu.shutil, 'which', lambda t: '/bin/' + t), \
+                    mock.patch.object(cu, 'run', lambda cmd, timeout=120: update if cmd[1] == 'update' else fake_brew(cmd)):
+                cu.check_brew(rep, True, None)
+            self.assertEqual(rep.problems, problems, update)
+            self.assertEqual(len(rep.items), 4, 'brew outdated still lists what it knows')
+
+    def test_a_fetch_the_time_limit_cut_short_is_left_to_its_row(self):
+        # The time limit's own problem row names what was left out.
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, '.claude', 'plugins', 'marketplaces', 'alpha'))
+            with open(os.path.join(home, '.claude', 'plugins', 'known_marketplaces.json'), 'w') as f:
+                json.dump({'alpha': {}}, f)
+            rep = cu.Report({})
+            with mock.patch.object(cu, 'HOME', home), mock.patch.object(cu.shutil, 'which', lambda t: '/bin/' + t), \
+                    mock.patch.object(cu, 'run', lambda cmd, timeout=120: None if 'update' in cmd
+                                      else '[]' if cmd[0] == 'claude' else fake_brew(cmd)), \
+                    mock.patch.object(cu, 'out_of_time', lambda: True):
+                cu.check_plugins(rep, True)
+                cu.check_brew(rep, True, None)
+        self.assertEqual(rep.problems, [])
+
 
 class GhPaths(unittest.TestCase):
     """What reaches `gh api` is a repos/<owner>/<repo>/contents path and nothing else."""

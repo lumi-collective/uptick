@@ -149,6 +149,11 @@ left out is named in one problem row, and the result and the cache still come ou
 - **`skills not checked: gh not found`**: install gh (`brew install gh`, on Windows `winget install --id GitHub.cli`),
   then run `gh auth login`.
 - **`skills not checked: gh got no answer from GitHub`**: run `gh auth login`, or check the network.
+- **`marketplaces not refreshed`**: `claude plugin marketplace update` failed or ran out of time for the
+  marketplaces it names, so their plugin rows compare with the copy from the last refresh. Run
+  `claude plugin marketplace update <name>` with one of those names to see why.
+- **`Homebrew not refreshed: brew update failed or timed out`**: the Homebrew rows come from the metadata of the
+  last `brew update`. Run `brew update` to see why.
 - **`not scanned for vulnerabilities: osv-scanner not found`**: install it with `brew install osv-scanner`, or on
   Windows `winget install --exact --id Google.OSVScanner`. If Uptick still says it is not found after the winget
   install, start Claude Code again from a new terminal.
@@ -215,6 +220,7 @@ left out is named in one problem row, and the result and the cache still come ou
   your home folder: an install made in your home folder itself, else the user-scope one, else the first local
   one, else the first project one. An older install in a project is not shown; run `claude plugin update` in
   that project.
+- Only a skill installed from GitHub is compared; one line of the report counts the others as `not compared`.
 - A skill at the root of its repository is not compared; it shows under Info with the reason. A skill installed at a
   pinned `ref` is compared at that ref, as the skills CLI does.
 - A cask that needs an administrator password fails in the pane; run `brew upgrade --cask <id>` in a

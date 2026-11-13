@@ -16,6 +16,9 @@
   `UPTICK_KNOWN_BROKEN` is set. A version you skipped no longer comes back with the daily cache. The checker's
   new flag `--known-broken-from-config` does it. The Task Scheduler command in `extras/windows` passes it too;
   create a task made from the old command again to get it.
+- A fetch that fails is a problem row, no longer silent: a marketplace that `claude plugin marketplace update`
+  did not refresh, and a failed `brew update`, since their rows then compare with an old copy. Skills not
+  installed from GitHub get one `not compared` line instead of none.
 
 ## 0.4.0
 

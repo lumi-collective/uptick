@@ -323,10 +323,22 @@ def check_plugins(rep, fetch):
         rep.skipped.append('claude not found, plugins not checked')
         return
     root = os.path.join(HOME, '.claude', 'plugins', 'marketplaces')
+    # Claude Code's list of marketplaces. A directory marketplace lives where it was added, not under marketplaces/.
+    try:
+        with open(os.path.join(HOME, '.claude', 'plugins', 'known_marketplaces.json')) as f:
+            known = json.load(f)
+    except (OSError, ValueError):
+        known = {}
     if fetch and os.path.isdir(root):
         until = time.monotonic() + FETCH_MARKETPLACES_SECONDS
-        for m in sorted(os.listdir(root)):
-            run(['claude', 'plugin', 'marketplace', 'update', m], timeout=min(60, until - time.monotonic()))
+        # Only a folder Claude Code lists is a marketplace: anything else there (a .DS_Store) would fail every time.
+        stale = [m for m in sorted(os.listdir(root)) if isinstance(known, dict) and m in known and run(
+            ['claude', 'plugin', 'marketplace', 'update', m], timeout=min(60, until - time.monotonic())) is None]
+        # A plugin row compares with the marketplace's copy: one that did not refresh can be out of date. The hint
+        # names no marketplace: a name is outside text, and the hint is a command to paste.
+        if stale and not out_of_time():
+            rep.problem(f'marketplaces not refreshed: {", ".join(stale)} (their plugin rows may be out of date)',
+                        'run claude plugin marketplace update <name> to see why')
     try:
         listed = json.loads(run(['claude', 'plugin', 'list', '--json'], timeout=60) or 'null')
     except ValueError:
@@ -335,12 +347,6 @@ def check_plugins(rep, fetch):
     if not isinstance(listed, list):
         rep.problem('plugins not checked: claude plugin list failed')
         return
-    # A directory marketplace lives where it was added, not under marketplaces/.
-    try:
-        with open(os.path.join(HOME, '.claude', 'plugins', 'known_marketplaces.json')) as f:
-            known = json.load(f)
-    except (OSError, ValueError):
-        known = {}
     # One id can have an install record per scope and project; `enabled` is the id's, in the folder this runs in.
     records = {}
     for p in listed:
@@ -395,6 +401,8 @@ def check_skills(rep):
         rep.problem('skills not checked: ~/.agents/.skill-lock.json not readable')
         return
     github = {k: e for k, e in lock.items() if isinstance(e, dict) and e.get('sourceType') == 'github'}
+    if len(lock) > len(github):
+        rep.skipped.append(f'{len(lock) - len(github)} skills not from GitHub: not compared')
     if not github:
         return
     rep.checked.append(f'{len(github)} skills')
@@ -444,8 +452,9 @@ def check_brew(rep, fetch, brewfile):
     except OSError:
         rep.problem(f'Homebrew not checked: Brewfile not readable: {brewfile}', 'check uptick.brewfile in /config')
         return
-    if fetch:
-        run(['brew', 'update', '--quiet'], timeout=FETCH_BREW_SECONDS)
+    if fetch and run(['brew', 'update', '--quiet'], timeout=FETCH_BREW_SECONDS) is None and not out_of_time():
+        rep.problem('Homebrew not refreshed: brew update failed or timed out (its rows may be out of date)',
+                    'run brew update to see why')
     try:
         data = json.loads(run(['brew', 'outdated', '--json=v2'], timeout=300) or 'null')
     except ValueError:
