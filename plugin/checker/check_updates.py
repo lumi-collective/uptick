@@ -10,7 +10,8 @@ Appium and the plugins (brew vulns, osv-scanner; online, at most once a day each
 listed in ~/.config/uptick/scan-repos.json, into ~/.cache/uptick/vulns.json.
 
 Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
-                        [--known-broken PATH] [--extra COMMAND] [--kinds LIST] [--vulns-now]
+                        [--known-broken PATH] [--known-broken-from-config] [--extra COMMAND] [--kinds LIST]
+                        [--vulns-now]
   --json               print the result as JSON (schema: docs/reference.md) instead of text
   --fetch              refresh marketplace and Homebrew metadata first (slow)
   --cache [PATH]       also write the JSON to PATH (default: ~/.cache/uptick/last.json)
@@ -19,6 +20,9 @@ Usage: check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
                        that upstream version is a note, not an update; `kind` (optional) narrows the entry;
                        `exact` (optional) holds back that version only, not one that starts with it
                        (default: ~/.config/uptick/known-broken.json, when it exists)
+  --known-broken-from-config
+                       without --known-broken: the list set as knownBroken in Uptick's /config, from
+                       ~/.claude/settings.json (the daily check passes it)
   --extra COMMAND      run COMMAND (split like a shell, run without one) and merge the JSON it prints
   --kinds LIST         comma list of plugin, skill, brew, uv, winget, vulns: check only these
                        (default: plugin, skill, brew)
@@ -210,6 +214,25 @@ def claude_settings():
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError, RecursionError):
         return {}
+
+
+def configured_known_broken(settings):
+    """The known-broken list set in Uptick's /config, where Skip writes, resolved as the mod resolves it; else None."""
+    configs = settings.get('pluginConfigs')
+    found = set()
+    for key, entry in (configs.items() if isinstance(configs, dict) else ()):
+        options = entry.get('options') if key.startswith('uptick@') and isinstance(entry, dict) else None
+        value = options.get('knownBroken') if isinstance(options, dict) else None
+        if isinstance(value, str) and value.strip():
+            found.add(value.strip())
+    # shortcut: two Uptick installs that name different lists give none, so the daily check reads the default list.
+    if len(found) != 1:
+        return None
+    path = found.pop()
+    if path.startswith('~'):
+        return path
+    # The mod runs the checker from the home folder, so a relative setting lands there; join keeps a full path.
+    return os.path.join(os.environ.get('HOME') or os.environ.get('USERPROFILE') or HOME, path)
 
 
 def self_update_note(settings):
@@ -1149,13 +1172,17 @@ def main(argv=None):
     ap.add_argument('--cache', nargs='?', const='', default=None, metavar='PATH')
     ap.add_argument('--brewfile')
     ap.add_argument('--known-broken')
+    ap.add_argument('--known-broken-from-config', action='store_true')
     ap.add_argument('--extra')
     ap.add_argument('--kinds')
     ap.add_argument('--vulns-now', action='store_true')
     args = ap.parse_args(argv)
     listed = None if args.kinds is None else {k.strip() for k in args.kinds.split(',')} - {''}
     kinds = set(DEFAULT_KINDS) if listed is None else listed & set(KINDS)
-    result = check(args.fetch, args.brewfile, args.known_broken, args.extra, kinds, args.vulns_now)
+    known_broken = args.known_broken
+    if known_broken is None and args.known_broken_from_config:
+        known_broken = configured_known_broken(claude_settings())
+    result = check(args.fetch, args.brewfile, known_broken, args.extra, kinds, args.vulns_now)
     unknown = ', '.join(f'"{k}"' for k in sorted(listed - set(KINDS))) if listed else ''
     if unknown:
         # A typo must not silently turn a group off.

@@ -145,8 +145,8 @@ install, `~/.appium/package-lock.json`, `scan-repos.json` and the lockfiles of t
 (`node_modules` and `.git` left out). The environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
 `XDG_CONFIG_HOME` to find those files, and `PATH` to find the programs. To tell whether Claude Code updates itself:
 `DISABLE_UPDATES`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, from the environment and
-from the `env` block of `~/.claude/settings.json`, and from that file its release channel, `autoUpdatesChannel`;
-nothing else in that file. Where the `claude` on your `PATH` links to, to tell a Homebrew install.
+from the `env` block of `~/.claude/settings.json`, and from that file its release channel, `autoUpdatesChannel`.
+The daily check also reads there the `knownBroken` you set in `/config`. Nothing else in that file. Where the `claude` on your `PATH` links to, to tell a Homebrew install.
 
 **Writes:** its cache file, and with `vulns` in `kinds` its scan file, `${XDG_CACHE_HOME:-~/.cache}/uptick/vulns.json`;
 for a scan, an empty osv-scanner config and a list of the global npm packages, in a temporary folder it removes
@@ -161,7 +161,8 @@ them; the Brewfile path, the known-broken path and your `checkCommand` to the ch
 
 **The daily check, `uptick-check`,** runs `${XDG_CONFIG_HOME:-~/.config}/uptick/check.env` as shell code when it
 exists, to set `UPTICK_BREWFILE`, `UPTICK_KNOWN_BROKEN`, `UPTICK_CHECK_COMMAND`, `UPTICK_KINDS` and `UPTICK_PATH` (see
-[extras/README.md](extras/README.md)). It puts `UPTICK_PATH`, or by default `~/.local/bin` and the usual Homebrew
+[extras/README.md](extras/README.md)). Without `UPTICK_KNOWN_BROKEN` it reads the list set as `knownBroken` in
+`/config`, where Skip writes. It puts `UPTICK_PATH`, or by default `~/.local/bin` and the usual Homebrew
 folders, before `PATH`, runs the checker with `--fetch` unless you pass `--no-fetch`, and on Linux sends a
 `notify-send` notification when something needs a look, unless you pass `--no-notify`. On macOS it sends none.
 

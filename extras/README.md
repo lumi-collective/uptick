@@ -21,13 +21,12 @@ Runs the checker with `--fetch --cache` and prints the report. On Linux it sends
 notification when something needs a look. On macOS it sends none; the line above the prompt shows the result.
 `--no-fetch` makes it quick, `--no-notify` keeps it quiet.
 
-Give it the options you set in `/config` as environment variables, in
-`${XDG_CONFIG_HOME:-~/.config}/uptick/check.env`. The file is read as shell, so quote a value that holds a
-space:
+It reads the `knownBroken` you set in `/config` itself. Give it the other options you set there as environment
+variables, in `${XDG_CONFIG_HOME:-~/.config}/uptick/check.env`; `UPTICK_KNOWN_BROKEN` there wins over
+`knownBroken`. The file is read as shell, so quote a value that holds a space:
 
 ```
 UPTICK_BREWFILE=~/Brewfile
-UPTICK_KNOWN_BROKEN=~/.config/uptick/known-broken.json
 UPTICK_CHECK_COMMAND="python3 -I /path/to/my_check.py"
 UPTICK_KINDS=plugin,skill,brew
 ```

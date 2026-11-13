@@ -123,9 +123,12 @@ colon in its path, is left out and counted in `gaps`.
 
 ```
 python3 -I -X utf8 plugin/checker/check_updates.py [--json] [--fetch] [--cache [PATH]] [--brewfile PATH]
-                                                   [--known-broken PATH] [--extra COMMAND] [--kinds LIST]
-                                                   [--vulns-now]
+                                                   [--known-broken PATH] [--known-broken-from-config]
+                                                   [--extra COMMAND] [--kinds LIST] [--vulns-now]
 ```
+
+`--known-broken-from-config`, without `--known-broken`, reads the list set as `knownBroken` in `/config`, from
+`~/.claude/settings.json`; the daily check passes it.
 
 On Windows, write `py -3` for `python3`. Exit code: 0 when everything is current, 1 when updates are
 available, 2 when there are only problems. Known-broken notes, `not compared` items and Claude Code's own
@@ -185,6 +188,9 @@ left out is named in one problem row, and the result and the cache still come ou
   `brew outdated` lists its update in the Homebrew group (with a Brewfile set, only when the Brewfile lists the
   cask). An install through another package manager, such as WinGet, apt, dnf or apk, is not told apart: its row
   still compares with npm and says it updates itself.
+- The daily check takes only `knownBroken` from `/config`, and only from `~/.claude/settings.json`; a relative
+  path is under your home folder. Two Uptick installs that set different lists give none, and it reads the default
+  list. Set `brewfile`, `checkCommand` and `kinds` for it in `check.env`.
 - A uv tool installed from git, a URL or a folder, or with an exact pin (`name==1.0`), is shown under Info
   as `not compared`, never offered: `uv tool upgrade` keeps its source or pin. Reinstall it with
   `uv tool install name@latest` to follow the latest again.

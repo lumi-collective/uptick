@@ -7,6 +7,7 @@
 # in quotes; they win):
 #   UPTICK_BREWFILE, UPTICK_KNOWN_BROKEN, UPTICK_CHECK_COMMAND, UPTICK_KINDS
 #   UPTICK_PATH: folders put before PATH (default: ~/.local/bin and the usual Homebrew folders)
+# Without UPTICK_KNOWN_BROKEN the checker reads the knownBroken set in /config, where Skip writes.
 # Flags: --no-fetch (a quick check), --no-notify (no notification on Linux).
 # Exits 0; the report says what was found. On Linux, notify-send says when something needs a look.
 set -u
@@ -32,7 +33,7 @@ for arg in "$@"; do
   esac
 done
 
-args=(--cache)
+args=(--cache --known-broken-from-config)
 [ "$fetch" = 1 ] && args+=(--fetch)
 [ -n "${UPTICK_BREWFILE:-}" ] && args+=("--brewfile=$UPTICK_BREWFILE")
 [ -n "${UPTICK_KNOWN_BROKEN:-}" ] && args+=("--known-broken=$UPTICK_KNOWN_BROKEN")

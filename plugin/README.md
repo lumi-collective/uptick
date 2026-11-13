@@ -55,7 +55,8 @@ the check fails, it sends a notification with notify-send on Linux (none on macO
 that off. If its settings file, uptick/check.env in your config folder, exists, it runs that file as
 shell code to set its options (UPTICK_BREWFILE, UPTICK_KNOWN_BROKEN, UPTICK_CHECK_COMMAND, UPTICK_KINDS,
 UPTICK_PATH), and it puts UPTICK_PATH, or by default your ~/.local/bin and the usual Homebrew folders,
-before PATH.
+before PATH. Without UPTICK_KNOWN_BROKEN it reads the known-broken list set in the knownBroken setting,
+where Skip writes.
 
 ## What it reads and writes
 
@@ -69,7 +70,8 @@ by default) with the lockfiles of each repository it lists. It reads the environ
 USERPROFILE, OS, XDG_CACHE_HOME and XDG_CONFIG_HOME to find those files, and PATH to find the programs it
 runs. To tell whether Claude Code updates itself, it reads DISABLE_UPDATES, DISABLE_AUTOUPDATER and
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC from the environment and from the env block of your Claude Code
-settings.json, and from that file its release channel (autoUpdatesChannel); nothing else in that file. It
+settings.json, and from that file its release channel (autoUpdatesChannel). The daily check also reads
+there the knownBroken setting. Nothing else in that file. It
 reads where the claude on your PATH links to: a Homebrew install is left to the Homebrew list.
 
 It writes its cache file and, when vulns is in the kinds setting, its scan file. For a scan it writes an

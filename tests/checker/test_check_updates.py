@@ -469,6 +469,79 @@ class KnownBroken(unittest.TestCase):
         self.assertIn('known-broken list not readable', result['problems'][0]['text'])
 
 
+class KnownBrokenFromConfig(unittest.TestCase):
+    """The daily check reads the knownBroken set in /config, where Skip writes, as the mod resolves it. Only with
+    --known-broken-from-config: the mod's own runs keep reading what the mod names."""
+
+    def list_read(self, configs, flags=('--known-broken-from-config',)):
+        """The known-broken path main hands to check, with these pluginConfigs in settings.json."""
+        seen = []
+
+        def fake(*args):
+            seen.append(args[2])
+            return {'checkedAt': '2026-01-01T09:00:00+00:00', 'checked': [], 'skipped': [], 'problems': [], 'items': []}
+
+        with tempfile.TemporaryDirectory() as home:
+            self.home = home
+            os.makedirs(os.path.join(home, '.claude'))
+            with open(os.path.join(home, '.claude', 'settings.json'), 'w') as f:
+                json.dump({'pluginConfigs': configs(home) if callable(configs) else configs}, f)
+            with mock.patch.object(cu, 'HOME', home), mock.patch.dict(os.environ, {'HOME': home}), \
+                    mock.patch.object(cu, 'check', fake), mock.patch('sys.stdout', new_callable=io.StringIO):
+                cu.main(list(flags))
+        return seen[0]
+
+    @staticmethod
+    def uptick(value, key='uptick@uptick'):
+        return {key: {'options': {'knownBroken': value}}}
+
+    def test_the_daily_check_reads_the_list_set_in_config(self):
+        path = self.list_read(lambda home: self.uptick(f'  {os.path.join(home, "lists", "kb.json")} '))
+        self.assertEqual(path, os.path.join(self.home, 'lists', 'kb.json'))
+
+    def test_a_relative_or_home_path_lands_where_the_mods_does(self):
+        # The mod runs the checker from the home folder; `~` the checker expands itself.
+        self.assertEqual(self.list_read(self.uptick('lists/kb.json')), os.path.join(self.home, 'lists/kb.json'))
+        self.assertEqual(self.list_read(self.uptick('~/kb.json')), '~/kb.json')
+
+    def test_any_marketplace_counts_but_two_lists_name_none(self):
+        a, b = (os.path.join(tempfile.gettempdir(), name, 'kb.json') for name in 'ab')  # a full path on every system
+        self.assertEqual(self.list_read(self.uptick(a, 'uptick@plugins')), a)
+        self.assertEqual(self.list_read({**self.uptick(a), **self.uptick(a, 'uptick@plugins')}), a)
+        self.assertIsNone(self.list_read({**self.uptick(a), **self.uptick(b, 'uptick@plugins')}))
+
+    def test_without_the_flag_or_with_a_named_list_the_setting_is_not_read(self):
+        set_one = self.uptick('/a/kb.json')
+        self.assertIsNone(self.list_read(set_one, flags=()))
+        self.assertEqual(self.list_read(set_one, flags=('--known-broken-from-config', '--known-broken=/env/kb.json')),
+                         '/env/kb.json')
+
+    def test_a_setting_of_the_wrong_shape_is_not_followed(self):
+        for configs in ([], {'uptick@uptick': []}, {'uptick@uptick': {'options': []}}, self.uptick(['/a']),
+                        self.uptick('  '), self.uptick(''), self.uptick('/a/kb.json', 'other@uptick'),
+                        self.uptick('/a/kb.json', 'uptick')):
+            self.assertIsNone(self.list_read(configs), configs)
+
+    @unittest.skipIf(os.name == 'nt', 'the daily check is a bash script; on Windows a scheduled task runs the checker')
+    def test_the_daily_check_passes_the_flag(self):
+        launcher = os.path.join(ROOT, 'plugin', 'bin', 'uptick-check')
+        with tempfile.TemporaryDirectory() as folder:
+            stub = os.path.join(folder, 'python3')  # first on UPTICK_PATH: it writes down the checker's argv
+            with open(stub, 'w') as f:
+                f.write('#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGV_OUT"\n')
+            os.chmod(stub, 0o755)
+            env = {k: v for k, v in os.environ.items() if not k.startswith('UPTICK_')}
+            env.update(UPTICK_PATH=folder, XDG_CONFIG_HOME=folder, ARGV_OUT=os.path.join(folder, 'argv'))
+            for extra, wanted in (({}, None), ({'UPTICK_KNOWN_BROKEN': '/env/kb.json'}, '--known-broken=/env/kb.json')):
+                subprocess.run([launcher, '--no-fetch', '--no-notify'], env={**env, **extra}, check=True,
+                               capture_output=True)
+                with open(env['ARGV_OUT']) as f:
+                    argv = f.read().splitlines()
+                self.assertIn('--known-broken-from-config', argv)
+                if wanted:
+                    self.assertIn(wanted, argv)
+
+
 class Extra(unittest.TestCase):
     def merged(self, command):
         rep = cu.Report({})

@@ -12,6 +12,10 @@
 - The Claude Code row follows your release channel: with `autoUpdatesChannel` set to `stable` it compares with
   the npm registry's stable version, not latest. A Homebrew install no longer gets a row that says "updates
   itself": with `brew` in `kinds`, its update shows in the Homebrew group, from `brew outdated`.
+- The daily check, `uptick-check`, reads the `knownBroken` you set in `/config`, where Skip writes, unless
+  `UPTICK_KNOWN_BROKEN` is set. A version you skipped no longer comes back with the daily cache. The checker's
+  new flag `--known-broken-from-config` does it. The Task Scheduler command in `extras/windows` passes it too;
+  create a task made from the old command again to get it.
 
 ## 0.4.0
 
