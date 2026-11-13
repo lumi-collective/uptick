@@ -9,6 +9,9 @@
   package whose publisher asks winget to update it only by name, or one whose id winget cut short, is shown as
   `not compared`, never offered. On other systems
   `winget` in `kinds` is one skipped line.
+- The Claude Code row follows your release channel: with `autoUpdatesChannel` set to `stable` it compares with
+  the npm registry's stable version, not latest. A Homebrew install no longer gets a row that says "updates
+  itself": with `brew` in `kinds`, its update shows in the Homebrew group, from `brew outdated`.
 
 ## 0.4.0
 

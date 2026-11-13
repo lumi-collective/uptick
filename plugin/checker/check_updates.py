@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """uptick checker: which AI dev tools have a newer version. Read-only: installs nothing.
 
-Checks Claude Code (vs the npm registry's latest), installed Claude Code plugins (vs the version
+Checks Claude Code (vs the npm registry's version on its release channel), installed Claude Code plugins (vs the version
 their marketplace advertises), skills-CLI skills (~/.agents/.skill-lock.json tree hash vs GitHub,
 through gh), Homebrew, uv tools (uv tool list --outdated, which asks the package index) and, on Windows,
 winget packages (winget upgrade, which asks winget's sources).
@@ -200,19 +200,25 @@ class Report:
         self.items.append(item)
 
 
-def self_update_note():
-    """The Claude Code row's note when Claude Code skips its own updates, else None. Its flags come from its
-    environment, which the env block of ~/.claude/settings.json extends and overrides; a scheduled check
-    inherits only the first, so it reads the file too."""
-    env = dict(os.environ)
-    # shortcut: managed settings, CLAUDE_CONFIG_DIR and a lower-case key on Windows are missed; add one when a user needs it.
+def claude_settings():
+    """~/.claude/settings.json as a dict, else {}."""
+    # shortcut: managed settings, CLAUDE_CONFIG_DIR, a channel chosen at install time and a lower-case key on
+    # Windows are missed; add one when a user needs it.
     try:
         with open(os.path.join(HOME, '.claude', 'settings.json'), encoding='utf-8') as f:
             data = json.load(f)
-        if isinstance(data, dict) and isinstance(data.get('env'), dict):
-            env.update(data['env'])
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError, RecursionError):
-        pass
+        return {}
+
+
+def self_update_note(settings):
+    """The Claude Code row's note when Claude Code skips its own updates, else None. Its flags come from its
+    environment, which the env block of settings.json extends and overrides; a scheduled check inherits only
+    the first, so it reads the file too."""
+    env = dict(os.environ)
+    if isinstance(settings.get('env'), dict):
+        env.update(settings['env'])
 
     def is_set(name):  # Claude Code's reading: 1, true, yes or on, in any case
         return str(env.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -226,17 +232,25 @@ def self_update_note():
 
 
 def check_claude(rep):
-    if not shutil.which('claude'):
+    claude = shutil.which('claude')
+    if not claude:
         return
     current = (run(['claude', '--version']) or '').split(' ')[0]
     if not current:
         rep.problem('Claude Code: version not readable')
         return
     rep.checked.append(f'Claude Code {current}')
+    # A link into the Caskroom is a Homebrew cask, as Claude Code tells it. Claude Code, and brew outdated,
+    # take its next version from the cask, which can trail npm, so brew's row is the one to trust.
+    if re.search(r'[\\/]Caskroom[\\/]', os.path.realpath(claude)):
+        rep.skipped.append('Claude Code from Homebrew: not compared with npm')
+        return
     if not shutil.which('npm'):
         rep.skipped.append('npm not found, Claude Code version not compared')
         return
-    latest = run(['npm', 'view', '@anthropic-ai/claude-code', 'version'], timeout=60)
+    settings = claude_settings()
+    stable = settings.get('autoUpdatesChannel') == 'stable'
+    latest = run(['npm', 'view', '@anthropic-ai/claude-code' + ('@stable' if stable else ''), 'version'], timeout=60)
     if latest is None:
         if not out_of_time():
             rep.problem('could not reach the npm registry', offline=True)
@@ -247,7 +261,7 @@ def check_claude(rep):
         rep.items.append({**item, 'kind': 'info', 'note': NOT_COMPARED})
     elif is_newer:
         # Native installs update themselves unless a flag stops them; running sessions stay on the old binary.
-        note = self_update_note()
+        note = self_update_note(settings)
         rep.items.append({**item, 'kind': 'self', **({'note': note} if note else {})})
 
 

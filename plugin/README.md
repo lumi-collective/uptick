@@ -69,7 +69,8 @@ by default) with the lockfiles of each repository it lists. It reads the environ
 USERPROFILE, OS, XDG_CACHE_HOME and XDG_CONFIG_HOME to find those files, and PATH to find the programs it
 runs. To tell whether Claude Code updates itself, it reads DISABLE_UPDATES, DISABLE_AUTOUPDATER and
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC from the environment and from the env block of your Claude Code
-settings.json; nothing else in that file.
+settings.json, and from that file its release channel (autoUpdatesChannel); nothing else in that file. It
+reads where the claude on your PATH links to: a Homebrew install is left to the Homebrew list.
 
 It writes its cache file and, when vulns is in the kinds setting, its scan file. For a scan it writes an
 empty osv-scanner config and a list of the global npm packages into a temporary folder, removed afterwards. In
@@ -85,7 +86,7 @@ known-broken path and your extra check command to the checker.
 ## What it sends
 
 Uptick itself sends nothing anywhere and has no telemetry. The programs it starts fetch what they need:
-the npm registry for the latest Claude Code version; the GitHub API through gh for skill folders and plugin
+the npm registry for the newest Claude Code version on your release channel; the GitHub API through gh for skill folders and plugin
 manifests; your marketplaces and Homebrew when you check now, when the daily check runs, at a session start
 when no check has fetched for a day (tried again at a later start if the network was down), or on every open
 with fetchOnOpen on; whatever your own extra check command fetches; and whatever an update you confirm

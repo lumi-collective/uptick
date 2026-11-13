@@ -177,6 +177,14 @@ left out is named in one problem row, and the result and the cache still come ou
   winget's default installer mode, which shows the installer's progress; an installer that asks for
   administrator rights still shows the Windows prompt.
 - Pinned Homebrew packages are left out.
+- The Claude Code row reads its release channel only from `autoUpdatesChannel` in `~/.claude/settings.json`,
+  and only `stable` switches it: any other value, or a channel set in managed settings, under
+  `CLAUDE_CONFIG_DIR` or at install time, compares with latest.
+- A Claude Code that `claude` on the `PATH` links to in a Homebrew Caskroom gets no Claude Code row: the cask
+  can trail the npm registry, and an upgrade installs the cask's version, not npm's. With `brew` in `kinds`,
+  `brew outdated` lists its update in the Homebrew group (with a Brewfile set, only when the Brewfile lists the
+  cask). An install through another package manager, such as WinGet, apt, dnf or apk, is not told apart: its row
+  still compares with npm and says it updates itself.
 - A uv tool installed from git, a URL or a folder, or with an exact pin (`name==1.0`), is shown under Info
   as `not compared`, never offered: `uv tool upgrade` keeps its source or pin. Reinstall it with
   `uv tool install name@latest` to follow the latest again.

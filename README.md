@@ -26,7 +26,7 @@ In the desktop app: + next to the prompt box → Plugins → Add marketplace `lu
 
 It needs Python 3.9 or newer (`python3`, or `py` on Windows). On macOS run `xcode-select --install`; on Windows run
 `winget install -e --id Python.Python.3.13`, or use python.org with its py launcher. Each optional tool turns on one
-check, and a check whose tool is missing is skipped: **npm** for Claude Code's latest version and skill updates;
+check, and a check whose tool is missing is skipped: **npm** for Claude Code's newest version and skill updates;
 **gh**, signed in, for skills and plugins kept in their own GitHub repo; **Homebrew**; **uv** 0.10.10 or newer;
 **winget** on Windows; **osv-scanner** (`brew install osv-scanner`, on Windows
 `winget install --exact --id Google.OSVScanner`) and Homebrew's `brew vulns` for the vulnerability scan.
@@ -51,7 +51,7 @@ prompt says when updates wait; **Hide** keeps it away until the list changes.
 
 | Group | Compared against | Updated with |
 |---|---|---|
-| Claude Code | the npm registry's latest | nothing: it updates itself; shown under Info. With its auto-update off, the row says so, and names `claude update` when that can run |
+| Claude Code | the npm registry's latest, or its stable with `autoUpdatesChannel` set to `stable`; a Homebrew install is left to the Homebrew row | nothing: it updates itself; shown under Info. With its auto-update off, the row says so, and names `claude update` when that can run |
 | Plugins | the version the plugin's marketplace advertises (a plugin in its own GitHub repo: that repo's `plugin.json`) | `claude plugin update <id>` |
 | Skills installed with the [skills CLI](https://www.npmjs.com/package/skills) | the skill's folder on GitHub (tree hash) | `npx --yes skills@1.7.4 update -g <id>` |
 | Homebrew formulae and casks | `brew outdated`, optionally only what your Brewfile lists | `brew upgrade <id>` (`--cask` for a cask) |
@@ -90,7 +90,7 @@ the focus.
 
 **What leaves your machine:**
 
-- the npm registry: the latest Claude Code version (`npm view`);
+- the npm registry: the newest Claude Code version on your release channel, latest or stable (`npm view`);
 - the GitHub API through `gh`: skill folders and plugin manifests;
 - only when `uv` is in `kinds`: PyPI, or the package index you set for uv, through `uv tool list --outdated`: the name
   of every uv tool, on every check (also one installed from git, a URL or a folder, shown as `not compared`);
@@ -145,7 +145,8 @@ install, `~/.appium/package-lock.json`, `scan-repos.json` and the lockfiles of t
 (`node_modules` and `.git` left out). The environment variables `HOME`, `USERPROFILE`, `OS`, `XDG_CACHE_HOME` and
 `XDG_CONFIG_HOME` to find those files, and `PATH` to find the programs. To tell whether Claude Code updates itself:
 `DISABLE_UPDATES`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, from the environment and
-from the `env` block of `~/.claude/settings.json`; nothing else in that file.
+from the `env` block of `~/.claude/settings.json`, and from that file its release channel, `autoUpdatesChannel`;
+nothing else in that file. Where the `claude` on your `PATH` links to, to tell a Homebrew install.
 
 **Writes:** its cache file, and with `vulns` in `kinds` its scan file, `${XDG_CACHE_HOME:-~/.cache}/uptick/vulns.json`;
 for a scan, an empty osv-scanner config and a list of the global npm packages, in a temporary folder it removes

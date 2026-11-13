@@ -902,6 +902,65 @@ class SelfUpdateOff(unittest.TestCase):
             self.assertIsNone(self.note(settings), settings[:20])
 
 
+class ClaudeCodeChannel(unittest.TestCase):
+    """The row compares with the channel Claude Code updates from, autoUpdatesChannel. A Homebrew cask is
+    left to the Homebrew group: brew, and Claude Code, take its next version from the cask, not from npm."""
+    NPM = ('npm', 'view', '@anthropic-ai/claude-code', 'version')
+    NPM_STABLE = ('npm', 'view', '@anthropic-ai/claude-code@stable', 'version')
+
+    def rows(self, have, settings=None, cask=None):
+        answers = {('claude', '--version'): f'{have} (Claude Code)', self.NPM: '2.1.323', self.NPM_STABLE: '2.1.311'}
+        self.ran = []
+        clean = {k: v for k, v in os.environ.items() if k not in SelfUpdateOff.FLAGS}
+        with tempfile.TemporaryDirectory() as home:
+            claude = '/bin/claude'
+            if cask:  # the layout brew gives a cask's binary: a link in bin to the Caskroom
+                target = os.path.join(home, 'Caskroom', cask, '2.1.300', 'claude')
+                os.makedirs(os.path.dirname(target))
+                open(target, 'w').close()
+                os.makedirs(os.path.join(home, 'bin'))
+                claude = os.path.join(home, 'bin', 'claude')
+                try:
+                    os.symlink(target, claude)
+                except OSError:
+                    self.skipTest('no symlinks here')
+            if settings is not None:
+                os.makedirs(os.path.join(home, '.claude'))
+                with open(os.path.join(home, '.claude', 'settings.json'), 'w') as f:
+                    json.dump(settings, f)
+            rep = cu.Report({})
+            with mock.patch.object(cu, 'HOME', home), \
+                    mock.patch.object(cu.shutil, 'which', lambda t: claude if t == 'claude' else '/bin/' + t), \
+                    mock.patch.object(cu, 'run', lambda cmd, timeout=120: self.ran.append(tuple(cmd)) or answers[tuple(cmd)]), \
+                    mock.patch.dict(os.environ, clean, clear=True):
+                cu.check_claude(rep)
+        self.skipped = rep.skipped
+        return [(i['kind'], i['latest'], i.get('note')) for i in rep.items]
+
+    def test_stable_channel_compares_with_stable(self):
+        stable = {'autoUpdatesChannel': 'stable'}
+        self.assertEqual(self.rows('2.1.311', stable), [])
+        self.assertEqual(self.rows('2.1.300', stable), [('self', '2.1.311', None)])
+        # minimumVersion can keep a build newer than stable: nothing to offer.
+        self.assertEqual(self.rows('2.1.323', stable), [])
+
+    def test_only_stable_switches_the_channel(self):
+        for settings in (None, {}, {'autoUpdatesChannel': 'latest'}, {'autoUpdatesChannel': 'Stable'},
+                         {'autoUpdatesChannel': ['stable']}):
+            self.assertEqual(self.rows('2.1.311', settings), [('self', '2.1.323', None)], settings)
+
+    def test_homebrew_cask_is_left_to_the_homebrew_group(self):
+        for cask, settings in (('claude-code', None), ('claude-code@latest', {'autoUpdatesChannel': 'stable'}),
+                               ('claude-code', {'env': {'DISABLE_AUTOUPDATER': '1'}})):
+            self.assertEqual(self.rows('2.1.300', settings, cask=cask), [], cask)
+            self.assertEqual(self.skipped, ['Claude Code from Homebrew: not compared with npm'])
+            self.assertEqual(self.ran, [('claude', '--version')], 'npm is not asked')
+
+    def test_a_native_install_still_asks_npm(self):
+        self.assertEqual(self.rows('2.1.300'), [('self', '2.1.323', None)])
+        self.assertEqual((self.skipped, self.ran), ([], [('claude', '--version'), self.NPM]))
+
+
 class TextOutput(unittest.TestCase):
     def test_control_characters_never_reach_the_terminal(self):
         evil = 'x\x1b]52;c;aGk=\x07\x1b[2J\x9b31m\x00\ty'
