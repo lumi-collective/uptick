@@ -78,6 +78,9 @@ function world(
     checker = JSON.stringify(RESULT),
     failing = '',
     slow = '',
+    // The checker's answer after an update comes 30 ms later, in real time: after the test's end, as an engine
+    // call can on Windows.
+    late = false,
     isPlaced = true,
     env = { HOME } as Record<string, string>,
     says = {} as Record<string, string>,
@@ -137,6 +140,7 @@ function world(
     w.inits.push(e.init)
     if (argv[0] === 'python3' || argv[0] === 'py') {
       if (slow === 'checker') await clock.sleep(3000)
+      if (late && w.ran.some(isUpdate)) await new Promise(resolve => setTimeout(resolve, 30))
       return checker.startsWith('deny:') ? { deny: checker.slice(5) } : { value: ok(checker) }
     }
     // The proof that nothing installs unasked: an update argv before a confirm fails the test.
@@ -1133,6 +1137,13 @@ test('a uv upgrade with Nothing to upgrade and no pin hint is a tick', WITH_UV, 
   await ui.unmount()
 })
 
+// Like the test of a check under way at the session's end, for the check that follows a run.
+test('the check after a run, answered after its session ends, leaves nothing behind', WITH_UV, async ($, on) => {
+  const { ui, w } = await updateUvTool($, on, { late: true })
+  expect(w.ran.filter(argv => argv[0] === 'python3')).toHaveLength(2)
+  await ui.unmount()
+})
+
 // No --accept-source-agreements: a source's terms are yours to accept in winget, not Uptick's.
 const WINGET_ARGV = (id: string) => ['winget', 'upgrade', '--id', id, '--exact', '--accept-package-agreements', '--disable-interactivity']
 
@@ -1265,6 +1276,13 @@ test('a check that throws still ends: no checking… left behind', async ($, on)
   await ui.unmount()
 })
 
+// A reload or the session's end refuses the $ calls of work no one waits on: that must not be a rejection
+// nothing handled. The kit reports one at the file's end, so this test passes and the file fails.
+test('a check still under way when its session ends leaves nothing behind', async ($, on) => {
+  world(on, { slow: 'checker' })
+  await start($)
+  await runCommand($)
+})
 test('a check that cannot start says what to install, by system', async ($, on) => {
   const { clock } = world(on, { cache: null, checker: 'deny:ENOENT: no such file or directory, posix_spawn python3' })
   await start($)

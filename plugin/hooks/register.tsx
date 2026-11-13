@@ -125,6 +125,14 @@ async function publish($: Engine, result: CheckResult) {
   }
 }
 
+// Work started without a wait. Once its module is gone (a reload, the session's end) the host refuses its $
+// calls and no one is left to tell; any other failure stays a rejection.
+function inBackground(work: Promise<unknown>) {
+  work.catch(err => {
+    if (!/no hooks module of that name is loaded/.test(message(err))) throw err
+  })
+}
+
 // The elapsed timers redraw from `now`; one ticker while a check or a run is under way.
 async function tick($: Engine) {
   const now = await $.clock.now()
@@ -133,7 +141,7 @@ async function tick($: Engine) {
 
 function startTicker($: Engine) {
   if (ticker) return
-  ticker = $.clock.every(1000, () => void tick($))
+  ticker = $.clock.every(1000, () => inBackground(tick($)))
 }
 
 async function stopTickerWhenIdle($: Engine) {
@@ -202,7 +210,7 @@ async function checkIfDue($: Engine, cached: CheckResult | null) {
   const triedAt = await $.store.get('autoCheckAt')
   if (recent(triedAt, TEN_MINUTES)) return
   await $.store.set('autoCheckAt', now)
-  void startCheck($, isFetch)
+  inBackground(startCheck($, isFetch))
 }
 
 async function openPane($: Engine) {
@@ -218,7 +226,7 @@ async function openPane($: Engine) {
   const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true, rows, columns: 64 })
   // Not placed (no surface that places panes): the pane's tree draws in the band instead.
   await update($, whereA, () => (opened.isPlaced ? 'pane' : 'band'))
-  if (!isRunning(run)) void startCheck($, config.options.fetchOnOpen === true)
+  if (!isRunning(run)) inBackground(startCheck($, config.options.fetchOnOpen === true))
 }
 
 async function patchStep($: Engine, index: number, patch: Partial<Step>) {
@@ -295,7 +303,7 @@ async function startRun($: Engine, keys: readonly string[]) {
     const failed = ended.steps.filter(s => s.status === 'failed').length
     $.ui.toast(`${TITLE}: ${ok} updated${failed ? `, ${failed} failed` : ''}`)
   }
-  void startCheck($, false) // so the band and the list count what is still outdated
+  inBackground(startCheck($, false)) // so the band and the list count what is still outdated
 }
 
 function refuseSkip($: Engine, item: ToolItem, why: string) {
@@ -339,7 +347,7 @@ async function skipVersion($: Engine, item: ToolItem) {
   }
   $.ui.toast(`${TITLE}: ${item.name} ${item.latest} skipped until a newer version`)
   await update($, viewA, () => ({ name: 'list' }))
-  void startCheck($, false)
+  inBackground(startCheck($, false))
 }
 
 // Only types the command into the prompt: the person runs it with Enter.
@@ -657,7 +665,7 @@ async function draw($: Engine, e: DrawInput, isBand: boolean) {
           label={label}
           onPress={async () => {
             const current = await read($, viewA)
-            if (current.name === 'confirm') void startRun($, current.ids)
+            if (current.name === 'confirm') inBackground(startRun($, current.ids))
           }}
         />
       )
@@ -784,7 +792,7 @@ async function bandRow($: Engine, e: RenderInput<'AbovePrompt'>) {
     const panes = await $.ui.panes()
     if (panes.some(p => p.id === PANE && p.isShown)) return null
   }
-  const show = <Button key="show" plain label="Show" onPress={() => void openPane($)} />
+  const show = <Button key="show" plain label="Show" onPress={() => inBackground(openPane($))} />
   if (run && isRunning(run)) {
     const current = run.steps.findIndex(s => s.status === 'running')
     const now = await $.clock.now()
@@ -841,7 +849,7 @@ async function bandRow($: Engine, e: RenderInput<'AbovePrompt'>) {
       </Text>
       <Box flexGrow={1} />
       {show}
-      {w < 40 ? null : <Button key="hide" plain dimColor label="Hide" onPress={() => void hide()} />}
+      {w < 40 ? null : <Button key="hide" plain dimColor label="Hide" onPress={() => inBackground(hide())} />}
     </Box>
   )
 }
@@ -890,7 +898,7 @@ async function onSessionStart($: Engine, e: Args<'session.start'>, next: Next<'s
       $.ui.log(`uptick: cache not read: ${message(err)}`, { to: 'debug' })
     }
     cacheTimer?.cancel()
-    cacheTimer = $.clock.every(FIFTEEN_MINUTES, () => void refreshFromCache($))
+    cacheTimer = $.clock.every(FIFTEEN_MINUTES, () => inBackground(refreshFromCache($)))
   }
   return next(e)
 }
