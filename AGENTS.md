@@ -23,6 +23,8 @@ Instructions for coding agents working on Uptick. The README says what it does f
 - `tests/checker/test_check_updates.py`, `tests/checker/testdata/`: the checker's tests and synthetic
   fixtures, outside the plugin.
 - `extras/`: companions outside Claude Code (schedulers, Raycast).
+- `scripts/release.sh`: ships a release from the pushed tip of its release branch: main and the signed tag only
+  after a green `test` run of that branch on that commit, then the GitHub release. `tests/release/` tests it.
 - `docs/reference.md`: the details behind the README (settings in depth, the checker's JSON, limits). The
   listing of runs, reads and network access stays in the README itself.
 
@@ -35,7 +37,8 @@ claude plugin validate plugin
 claude plugin validate .claude-plugin/marketplace.json
 claude plugin test plugin
 python3 -I -B -m unittest discover -s tests/checker -p "test_*.py"
-shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh
+shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh scripts/release.sh tests/release/test_release.sh
+bash tests/release/test_release.sh
 ```
 
 The checker must also pass on Python 3.9. Write the failing test first, then the fix. Do not weaken a test

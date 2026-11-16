@@ -52,4 +52,7 @@ jobs:
       - run: claude plugin test plugin
       - name: shellcheck
         if: runner.os == 'Linux'
-        run: shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh
+        run: shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh scripts/release.sh tests/release/test_release.sh
+      - name: release script
+        if: runner.os == 'Linux'
+        run: bash tests/release/test_release.sh
