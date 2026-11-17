@@ -22,7 +22,7 @@ Instructions for coding agents working on Uptick. The README says what it does f
   also keeps the directory listing to Claude Code.
 - `tests/checker/test_check_updates.py`, `tests/checker/testdata/`: the checker's tests and synthetic
   fixtures, outside the plugin.
-- `extras/`: companions outside Claude Code (schedulers, Raycast).
+- `extras/`: companions outside Claude Code (the daily check's settings, Raycast).
 - `scripts/release.sh`: ships a release from the pushed tip of its release branch: main and the signed tag only
   after a green `test` run of that branch on that commit, then the GitHub release. `tests/release/` tests it.
 - `docs/reference.md`: the details behind the README (settings in depth, the checker's JSON, limits). The

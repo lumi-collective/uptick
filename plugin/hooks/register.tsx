@@ -102,7 +102,7 @@ async function readCache($: Engine): Promise<CheckResult | null> {
   }
 }
 
-// A scheduled check (extras/) rewrites the cache while sessions run: a newer result replaces the one shown.
+// A check outside the session (uptick-check, a scheduler) rewrites the cache while sessions run: a newer result replaces the one shown.
 async function refreshFromCache($: Engine) {
   const check = await read($, checkA)
   if (check) return

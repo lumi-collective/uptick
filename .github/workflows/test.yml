@@ -33,12 +33,17 @@ jobs:
       - run: python -I -B -m unittest discover -s tests/checker -p "test_*.py"
 
   mod:
-    name: mod (${{ matrix.os }}, claude plugin validate + test)
+    name: mod (${{ matrix.os }}, Claude Code ${{ matrix.channel }}, claude plugin validate + test)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        channel: [latest]
+        # Uptick supports the stable channel and newer: stable is the floor, tested once.
+        include:
+          - os: ubuntu-latest
+            channel: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,15 +51,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
-      # Uptick supports only the latest Claude Code, so CI tests what a user gets today.
-      - run: npm install -g --no-fund --no-audit @anthropic-ai/claude-code@latest
+      - run: npm install -g --no-fund --no-audit @anthropic-ai/claude-code@${{ matrix.channel }}
       - run: claude --version
       - run: claude plugin validate plugin
       - run: claude plugin validate .claude-plugin/marketplace.json
       - run: claude plugin test plugin
       - name: shellcheck
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.channel == 'latest'
         run: shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh scripts/release.sh tests/release/test_release.sh
       - name: release script
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.channel == 'latest'
         run: bash tests/release/test_release.sh

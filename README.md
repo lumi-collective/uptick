@@ -24,7 +24,7 @@ claude plugin install uptick --marketplace lumi-collective/uptick --config brewf
 
 In the desktop app: + next to the prompt box → Plugins → Add marketplace `lumi-collective/uptick` → Add plugin.
 
-It needs Python 3.9 or newer (`python3`, or `py` on Windows). On macOS run `xcode-select --install`; on Windows run
+Use Claude Code from the stable channel or newer; older versions are not supported. It needs Python 3.9 or newer (`python3`, or `py` on Windows). On macOS run `xcode-select --install`; on Windows run
 `winget install -e --id Python.Python.3.13`, or use python.org with its py launcher. Each optional tool turns on one
 check, and a check whose tool is missing is skipped: **npm** for Claude Code's newest version and skill updates;
 **gh**, signed in, for skills and plugins kept in their own GitHub repo; **Homebrew**; **uv** 0.10.10 or newer;
@@ -179,9 +179,9 @@ folders, before `PATH`, runs the checker with `--fetch` unless you pass `--no-fe
 | VS Code extension | untested |
 | claude.ai (web, mobile) and Cowork | not supported: the plugin does not install there |
 
-Uptick supports only the newest Claude Code of your release channel (latest or stable); CI tests latest. CI runs 8
-jobs: the checker on Linux, macOS and Windows with Python 3.9 and 3.13, and the plugin's validate and tests on the
-latest Claude Code on Linux and Windows.
+Use Claude Code from the stable channel or newer; older versions are not supported. CI runs 9 jobs: the checker
+on Linux, macOS and Windows with Python 3.9 and 3.13, and the plugin's validate and tests on the latest Claude
+Code on Linux and Windows and on the stable Claude Code on Linux.
 
 ## Limits
 

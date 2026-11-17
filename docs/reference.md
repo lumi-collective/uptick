@@ -246,8 +246,7 @@ knows the mod API; `AGENTS.md` lists the rules this code keeps. A prompt to star
 
 ## Companions
 
-`extras/` holds optional pieces that read or refresh the same cache file outside Claude Code: a daily
-check for launchd (macOS), systemd (Linux) and Task Scheduler (Windows), and a Raycast command. See
+`extras/` documents the daily check's settings and holds a Raycast command. See
 [extras/README.md](../extras/README.md).
 
 The daily check itself is `plugin/bin/uptick-check`. Claude Code puts a plugin's `bin/` on its Bash tool's
@@ -273,6 +272,7 @@ shellcheck plugin/bin/uptick-check extras/macos/raycast/uptick-check.sh
 outside it.
 
 The tests fake the tools Uptick checks and updates (the extra-check tests run small Python scripts of their own);
-none runs an update. CI runs 8 jobs: the checker on Linux, macOS and Windows with
-Python 3.9 and 3.13, and the mod's validate and tests on the latest Claude Code on Linux and Windows.
+none runs an update. CI runs 9 jobs: the checker on Linux, macOS and Windows with
+Python 3.9 and 3.13, and the mod's validate and tests on the latest Claude Code on Linux and Windows and on the
+stable Claude Code on Linux.
 

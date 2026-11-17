@@ -12,7 +12,8 @@ With the opt-in vulnerability scan turned on, updates that replace a vulnerable 
 
 ## Where it works
 
-Only the newest Claude Code of your release channel (latest or stable), on your own computer. It needs Python 3.9 or newer on that
+Claude Code on your own computer only. Use Claude Code from the stable channel or newer; older versions are not
+supported. It needs Python 3.9 or newer on that
 computer (on macOS: xcode-select --install; on Windows: winget install -e --id Python.Python.3.13, or
 python.org with its py launcher). In a terminal on macOS it is used daily. On Windows, with Uptick 0.2.0, the pane,
 the confirm step, one skill update from the pane, Update all, the claude -p report and the vulnerability scan

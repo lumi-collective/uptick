@@ -14,13 +14,15 @@
   itself": with `brew` in `kinds`, its update shows in the Homebrew group, from `brew outdated`.
 - The daily check, `uptick-check`, reads the `knownBroken` you set in `/config`, where Skip writes, unless
   `UPTICK_KNOWN_BROKEN` is set. A version you skipped no longer comes back with the daily cache. The checker's
-  new flag `--known-broken-from-config` does it. The Task Scheduler command in `extras/windows` passes it too;
-  create a task made from the old command again to get it.
+  new flag `--known-broken-from-config` does it. A Windows task that runs the checker needs the flag too:
+  create it again with `--known-broken-from-config` added to its command.
 - A fetch that fails is a problem row, no longer silent: a marketplace that `claude plugin marketplace update`
   did not refresh, and a failed `brew update`, since their rows then compare with an old copy. Skills not
   installed from GitHub get one `not compared` line instead of none.
-- Uptick supports only the newest Claude Code of your release channel (latest or stable). CI tests the plugin on
-  the latest Claude Code.
+- Use Claude Code from the stable channel or newer; older versions are not supported. CI tests the plugin on the
+  latest and on the stable Claude Code.
+- The schedulers for launchd, systemd and Task Scheduler are gone from `extras/`: a new session checks on its own
+  when no check has fetched for a day. A schedule set up from an older release keeps working.
 
 ## 0.4.0
 
