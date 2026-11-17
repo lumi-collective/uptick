@@ -274,5 +274,5 @@ outside it.
 
 The tests fake the tools Uptick checks and updates (the extra-check tests run small Python scripts of their own);
 none runs an update. CI runs 8 jobs: the checker on Linux, macOS and Windows with
-Python 3.9 and 3.13, and the mod's validate and tests on the pinned Claude Code (2.1.319) on Linux and Windows.
+Python 3.9 and 3.13, and the mod's validate and tests on the latest Claude Code on Linux and Windows.
 

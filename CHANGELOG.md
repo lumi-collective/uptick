@@ -19,6 +19,8 @@
 - A fetch that fails is a problem row, no longer silent: a marketplace that `claude plugin marketplace update`
   did not refresh, and a failed `brew update`, since their rows then compare with an old copy. Skills not
   installed from GitHub get one `not compared` line instead of none.
+- Uptick supports only the newest Claude Code of your release channel (latest or stable). CI tests the plugin on
+  the latest Claude Code.
 
 ## 0.4.0
 

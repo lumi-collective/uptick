@@ -45,8 +45,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
-      - run: npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.319
+          node-version: "26"
+      # Uptick supports only the latest Claude Code, so CI tests what a user gets today.
+      - run: npm install -g --no-fund --no-audit @anthropic-ai/claude-code@latest
+      - run: claude --version
       - run: claude plugin validate plugin
       - run: claude plugin validate .claude-plugin/marketplace.json
       - run: claude plugin test plugin

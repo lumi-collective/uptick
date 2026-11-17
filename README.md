@@ -179,8 +179,9 @@ folders, before `PATH`, runs the checker with `--fetch` unless you pass `--no-fe
 | VS Code extension | untested |
 | claude.ai (web, mobile) and Cowork | not supported: the plugin does not install there |
 
-Tested with Claude Code 2.1.319. CI runs 8 jobs: the checker on Linux, macOS and Windows with Python 3.9 and 3.13,
-and the plugin's validate and tests on Linux and Windows.
+Uptick supports only the newest Claude Code of your release channel (latest or stable); CI tests latest. CI runs 8
+jobs: the checker on Linux, macOS and Windows with Python 3.9 and 3.13, and the plugin's validate and tests on the
+latest Claude Code on Linux and Windows.
 
 ## Limits
 
