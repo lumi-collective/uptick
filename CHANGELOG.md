@@ -19,8 +19,8 @@
 - A fetch that fails is a problem row, no longer silent: a marketplace that `claude plugin marketplace update`
   did not refresh, and a failed `brew update`, since their rows then compare with an old copy. Skills not
   installed from GitHub get one `not compared` line instead of none.
-- Use Claude Code from the stable channel or newer; older versions are not supported. CI tests the plugin on the
-  latest and on the stable Claude Code.
+- Use Claude Code from the stable channel or newer. CI tests the plugin on the latest and on the stable Claude
+  Code.
 - The schedulers for launchd, systemd and Task Scheduler are gone from `extras/`: a new session checks on its own
   when no check has fetched for a day. A schedule set up from an older release keeps working.
 
